@@ -3,11 +3,16 @@
 #include <stdio.h>
 
 #include "driver/uart.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
 #include "effects.h"
 #include "led_math.h"
 
 #define CONSOLE_UART_NUM    UART_NUM_0
 #define CONSOLE_BUF_SIZE    256
+
+static const char *TAG = "console";
 
 /* Global handles to control which effect, effect parameters, and mapping are currently active */
 extern EffectParams_t effect_params;
@@ -16,8 +21,6 @@ extern const Mapping_t *current_mapping;
 
 static char cmd_buffer[CONSOLE_BUF_SIZE];
 static uint16_t rx_index;
-static uint8_t welcomed;
-static uint8_t newline_flag;
 
 static const char welcome_message[] =
         "Welcome to the PulseBox LED control CLI.\r\n"
@@ -199,19 +202,26 @@ void console_init(void)
     uart_param_config(CONSOLE_UART_NUM, &uart_config);
 }
 
-void console_process(void)
+void console_task(void *pvParameters)
 {
-    uint8_t byte;
-    while (uart_read_bytes(CONSOLE_UART_NUM, &byte, 1, 0) > 0) {
-        if (!welcomed) {
-            console_print(welcome_message, strlen(welcome_message));
-            welcomed = 1;
+    ESP_LOGI(TAG, "Console task started on core %d", xPortGetCoreID());
+    console_print(welcome_message, strlen(welcome_message));
+
+    while (1) {
+        uint8_t byte;
+        int len = uart_read_bytes(CONSOLE_UART_NUM, &byte, 1, pdMS_TO_TICKS(10));
+        if (len <= 0) {
+            continue;
         }
 
         if (byte == '\n' || byte == '\r') {
             cmd_buffer[rx_index] = '\0';
-            newline_flag = 1;
             console_print("\r\n", 2);
+            if (rx_index > 0) {
+                process_user_command();
+            }
+            rx_index = 0;
+            console_print("> ", 2);
         }
         else if (byte == '\b' || byte == 0x7F) {
             if (rx_index > 0) {
@@ -223,12 +233,5 @@ void console_process(void)
             cmd_buffer[rx_index++] = byte;
             console_print((char *)&byte, 1);
         }
-    }
-
-    if (newline_flag) {
-        process_user_command();
-        rx_index = 0;
-        newline_flag = 0;
-        console_print("> ", 2);
     }
 }

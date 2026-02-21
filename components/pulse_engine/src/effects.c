@@ -27,6 +27,20 @@
 /************************/
 
 
+/***** BASS MAGNITUDE HELPER - EXTRACTS BASS ENERGY FROM FFT BINS 1-4 ********/
+static float compute_bass_magnitude(const AudioState_t *audio)
+{
+	float bass_mag = 0.0f;
+	for (int i = 1; i <= 4; i++) {
+		float real = audio->fft_bins[i * 2];
+		float imag = audio->fft_bins[i * 2 + 1];
+		bass_mag += sqrtf(real * real + imag * imag);
+	}
+	float db = 20.0f * log10f(bass_mag + 1.0f);
+	return fminf(fmaxf((db - 60.0f) * (255.0f / 40.0f), 0.0f), 255.0f);
+}
+
+
 /***** BASS EFFECT - PULSES BRIGHTNESS BASED ON LOW FREQUENCY CONTENT ********/
 #define BASS_MIN_BRIGHTNESS 		10.0f
 
@@ -40,8 +54,9 @@ static void bass_pulse_compute(const Canvas_t *canvas, const FrameState_t *frame
 	static AudioState_t audio;
 	audio_update(&audio);
 
+	float bass = compute_bass_magnitude(&audio);
 	float scale = 0.5f + params->sensitivity * 0.015f;
-	float target = fminf(audio.bass_magnitude * scale, 255.0f);
+	float target = fminf(bass * scale, 255.0f);
 	// float target = fminf(audio.bass_magnitude, 255.0f);
 
 	if (target >= current_brightness) {
@@ -85,9 +100,10 @@ static void bass_splash_compute(const Canvas_t *canvas, const FrameState_t *fram
     static uint8_t was_below = 1;  // prevent rapid re-triggering
 
     audio_update(&audio);
+    float bass = compute_bass_magnitude(&audio);
 
     // Spawn wave on bass hit (only if we dropped below threshold since last hit)
-    if (audio.bass_magnitude > threshold && was_below) {
+    if (bass > threshold && was_below) {
         for (int i = 0; i < MAX_WAVES; i++) {
             if (!waves[i].active) {
                 waves[i].radius = 0;
@@ -98,7 +114,7 @@ static void bass_splash_compute(const Canvas_t *canvas, const FrameState_t *fram
             }
         }
     }
-    if (audio.bass_magnitude < threshold * 0.7f) {
+    if (bass < threshold * 0.7f) {
         was_below = 1;
     }
 

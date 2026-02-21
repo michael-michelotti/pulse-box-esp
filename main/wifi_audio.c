@@ -1,7 +1,6 @@
 #include "wifi_audio.h"
 
 #include <string.h>
-#include <math.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 
@@ -17,15 +16,28 @@ static const char *TAG = "wifi_audio";
 // Ping-pong PCM buffers (2048 samples each, 16-bit mono)
 static int16_t audio_buffer_0[AUDIO_FFT_SIZE];
 static int16_t audio_buffer_1[AUDIO_FFT_SIZE];
-static int16_t *front_buffer = audio_buffer_0;  // Read by audio_update
+static int16_t *front_buffer = audio_buffer_0;  // Read by FFT task
 static int16_t *back_buffer  = audio_buffer_1;  // Written by UDP task
 static int     back_buffer_pos = 0;
-static volatile bool audio_buffer_ready = false;
 
 // FFT working memory: complex interleaved (real, imag pairs) = 2 * N floats
 static float fft_work_buf[AUDIO_FFT_SIZE * 2];
 // Hann window precomputed
 static float hann_window[AUDIO_FFT_SIZE];
+
+// Double-buffered AudioState: FFT task writes back, render task reads front
+static float fft_bins_0[AUDIO_FFT_SIZE * 2];
+static float fft_bins_1[AUDIO_FFT_SIZE * 2];
+static AudioState_t audio_state_0 = { .fft_bins = fft_bins_0, .num_bins = 0 };
+static AudioState_t audio_state_1 = { .fft_bins = fft_bins_1, .num_bins = 0 };
+static AudioState_t *audio_front = &audio_state_0;  // Read by render task
+static AudioState_t *audio_back  = &audio_state_1;  // Written by FFT task
+
+// Cross-core spinlock protecting audio_front pointer swap
+static portMUX_TYPE audio_spinlock = portMUX_INITIALIZER_UNLOCKED;
+
+// Task handle for FFT task (UDP task notifies it)
+static TaskHandle_t fft_task_handle = NULL;
 
 // Receive buffer: header + max samples per packet
 static uint8_t udp_rx_buf[sizeof(AudioPacketHeader_t) + (AUDIO_SAMPLES_PER_PKT * sizeof(int16_t))];
@@ -62,13 +74,11 @@ static void udp_audio_task(void *pvParameters)
 
         AudioPacketHeader_t *hdr = (AudioPacketHeader_t *)udp_rx_buf;
         if (hdr->magic != AUDIO_MAGIC) {
-            // ESP_LOGW(TAG, "Received %d bytes but bad magic: 0x%04X", len, hdr->magic);
             continue;
         }
 
         int payload_bytes = len - sizeof(AudioPacketHeader_t);
         int num_samples = payload_bytes / sizeof(int16_t);
-        // ESP_LOGI(TAG, "UDP recv: %d bytes, seq=%d, %d samples", len, hdr->seq, num_samples);
         int16_t *samples = (int16_t *)(udp_rx_buf + sizeof(AudioPacketHeader_t));
 
         // Copy samples into back buffer
@@ -77,12 +87,48 @@ static void udp_audio_task(void *pvParameters)
         memcpy(&back_buffer[back_buffer_pos], samples, to_copy * sizeof(int16_t));
         back_buffer_pos += to_copy;
 
-        // When back buffer is full, signal ready
+        // When back buffer is full, notify FFT task
         if (back_buffer_pos >= AUDIO_FFT_SIZE) {
-            audio_buffer_ready = true;
+            xTaskNotifyGive(fft_task_handle);
             back_buffer_pos = 0;
-            // ESP_LOGI(TAG, "Audio buffer ready (seq=%d, %d samples)", hdr->seq, AUDIO_FFT_SIZE);
         }
+    }
+}
+
+static void audio_fft_task(void *pvParameters)
+{
+    ESP_LOGI(TAG, "Audio FFT task started on core %d", xPortGetCoreID());
+
+    while (1) {
+        // Wait for UDP task to signal a full buffer
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        // Swap PCM ping-pong buffers so UDP task can fill the other one
+        int16_t *tmp = front_buffer;
+        front_buffer = back_buffer;
+        back_buffer = tmp;
+
+        // Apply Hann window and pack into complex format (real, imag pairs)
+        // Keep raw int16 scale so FFT magnitudes match what effects expect from STM32
+        for (int i = 0; i < AUDIO_FFT_SIZE; i++) {
+            fft_work_buf[i * 2]     = (float)front_buffer[i] * hann_window[i];
+            fft_work_buf[i * 2 + 1] = 0.0f;
+        }
+
+        // Run FFT
+        dsps_fft2r_fc32(fft_work_buf, AUDIO_FFT_SIZE);
+        dsps_bit_rev2r_fc32(fft_work_buf, AUDIO_FFT_SIZE);
+
+        // Write FFT results into back AudioState
+        memcpy(audio_back->fft_bins, fft_work_buf, AUDIO_FFT_SIZE * 2 * sizeof(float));
+        audio_back->num_bins = AUDIO_FFT_SIZE / 2;
+
+        // Swap front/back AudioState pointers under spinlock
+        taskENTER_CRITICAL(&audio_spinlock);
+        AudioState_t *swap = audio_front;
+        audio_front = audio_back;
+        audio_back = swap;
+        taskEXIT_CRITICAL(&audio_spinlock);
     }
 }
 
@@ -103,48 +149,16 @@ void audio_init(void)
 
 void audio_update(AudioState_t *state)
 {
-    // Swap buffers if new data is ready
-    if (audio_buffer_ready) {
-        int16_t *tmp = front_buffer;
-        front_buffer = back_buffer;
-        back_buffer = tmp;
-        audio_buffer_ready = false;
-    }
-
-    // Apply Hann window and pack into complex format (real, imag pairs)
-    // Keep raw int16 scale so FFT magnitudes match what effects expect from STM32
-    for (int i = 0; i < AUDIO_FFT_SIZE; i++) {
-        fft_work_buf[i * 2]     = (float)front_buffer[i] * hann_window[i];
-        fft_work_buf[i * 2 + 1] = 0.0f;  // Imaginary = 0 for real input
-    }
-
-    // Run FFT (complex radix-2, then bit-reversal to reorder bins)
-    dsps_fft2r_fc32(fft_work_buf, AUDIO_FFT_SIZE);
-    dsps_bit_rev2r_fc32(fft_work_buf, AUDIO_FFT_SIZE);
-
-    // Extract bass magnitude from bins 1-4
-    // Each bin = sample_rate / fft_size = 48000/2048 ≈ 23.4 Hz
-    // Bins 1-4 ≈ 23-94 Hz (sub-bass to bass)
-    float bass_mag = 0.0f;
-    for (int i = 1; i <= 4; i++) {
-        float real = fft_work_buf[i * 2];
-        float imag = fft_work_buf[i * 2 + 1];
-        bass_mag += sqrtf(real * real + imag * imag);
-    }
-
-    // Convert to dB scale, then map to 0-255 range
-    // Raw int16 FFT magnitudes: bass bins sum can reach ~100k at full volume
-    // 20*log10(100000) ≈ 100 dB, so threshold at 60 dB, scale over 40 dB range
-    float db = 20.0f * log10f(bass_mag + 1.0f);
-    float scaled = fminf(fmaxf((db - 60.0f) * (255.0f / 40.0f), 0.0f), 255.0f);
-
-    state->bass_magnitude = scaled;
-    state->fft_bins = fft_work_buf;
-    state->num_bins = AUDIO_FFT_SIZE / 2;
+    // Copy the latest FFT results from the front buffer under spinlock
+    taskENTER_CRITICAL(&audio_spinlock);
+    state->fft_bins = audio_front->fft_bins;
+    state->num_bins = audio_front->num_bins;
+    taskEXIT_CRITICAL(&audio_spinlock);
 }
 
 void wifi_audio_init(void)
 {
     audio_init();
+    xTaskCreatePinnedToCore(audio_fft_task, "audio_fft", 8192, NULL, 4, &fft_task_handle, 1);
     xTaskCreatePinnedToCore(udp_audio_task, "udp_audio", 4096, NULL, 5, NULL, 1);
 }

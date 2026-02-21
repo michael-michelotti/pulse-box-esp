@@ -96,6 +96,31 @@ static void mdns_init_service(void)
     ESP_LOGI(TAG, "mDNS registered: pulsebox.local, audio service on UDP %d", AUDIO_UDP_PORT);
 }
 
+static void render_task(void *pvParameters)
+{
+    ESP_LOGI(TAG, "Render task started on core %d", xPortGetCoreID());
+
+    FrameState_t frame = {0};
+    float prev_time = 0;
+    int64_t last_frame_us = 0;
+
+    while (1) {
+        int64_t now = esp_timer_get_time();
+        if (now - last_frame_us >= 33333) { // ~30 FPS
+            frame.time = now / 1000000.0f;
+            frame.dt = frame.time - prev_time;
+            prev_time = frame.time;
+
+            renderer_render_frame(&canvas, &frame, current_effect,
+                                  &effect_params, current_mapping,
+                                  &esp32_ws2812b_driver);
+
+            last_frame_us = now;
+        }
+        vTaskDelay(1); // Yield to idle task
+    }
+}
+
 void app_main(void)
 {
     // NVS is required by WiFi driver
@@ -127,29 +152,16 @@ void app_main(void)
     wifi_init_sta();
     mdns_init_service();
 
-    // Start UDP audio receiver + FFT on core 1
+    // Start UDP audio receiver + FFT tasks on core 1
     wifi_audio_init();
 
-    ESP_LOGI(TAG, "PulseBox started, running rainbow effect");
+    ESP_LOGI(TAG, "PulseBox started, creating tasks");
 
-    FrameState_t frame = {0};
-    float prev_time = 0;
-    int64_t last_frame_us = 0;
+    // Create render task on core 0
+    xTaskCreatePinnedToCore(render_task, "render", 8192, NULL, 5, NULL, 0);
 
-    while (1) {
-        int64_t now = esp_timer_get_time();
-        console_process();
-        if (now - last_frame_us >= 33333) { // ~30 FPS
-            frame.time = now / 1000000.0f;
-            frame.dt = frame.time - prev_time;
-            prev_time = frame.time;
+    // Create console task on core 0
+    xTaskCreatePinnedToCore(console_task, "console", 4096, NULL, 3, NULL, 0);
 
-            renderer_render_frame(&canvas, &frame, current_effect,
-                                  &effect_params, current_mapping,
-                                  &esp32_ws2812b_driver);
-
-            last_frame_us = now;
-        }
-        vTaskDelay(1); // Yield to idle task
-    }
+    // app_main returns — FreeRTOS scheduler keeps running the created tasks
 }

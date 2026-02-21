@@ -2,6 +2,6 @@
 #define CONSOLE_H
 
 void console_init(void);
-void console_process(void);
+void console_task(void *pvParameters);
 
 #endif
