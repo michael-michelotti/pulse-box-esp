@@ -5,6 +5,7 @@ idf_component_register(
         "src/led_math.c"
         "src/mappings.c"
         "src/renderer.c"
+        "src/audio.c"
     INCLUDE_DIRS
         "include"
 )

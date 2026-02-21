@@ -9,6 +9,7 @@
 #include "mappings.h"
 #include "renderer.h"
 #include "esp_led_driver.h"
+#include "console.h"
 
 static const char *TAG = "pulsebox";
 
@@ -37,6 +38,7 @@ void app_main(void)
     canvas_init(&canvas);
     esp32_ws2812b_driver.init();
     renderer_init();
+    console_init();
 
     ESP_LOGI(TAG, "PulseBox started, running rainbow effect");
 
@@ -46,6 +48,7 @@ void app_main(void)
 
     while (1) {
         int64_t now = esp_timer_get_time();
+        console_process();
         if (now - last_frame_us >= 33333) { // ~30 FPS
             frame.time = now / 1000000.0f;
             frame.dt = frame.time - prev_time;

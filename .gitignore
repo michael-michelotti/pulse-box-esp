@@ -81,3 +81,4 @@ Desktop.ini
 .devcontainer/
 .clangd
 dependencies.lock
+*.md

@@ -2,9 +2,12 @@ idf_component_register(
     SRCS
         "main.c"
         "esp_led_driver.c"
+        "console.c"
+        "wifi_audio.c"
     INCLUDE_DIRS
         "."
     REQUIRES
         pulse_engine
         esp_timer
+        esp_driver_uart
 )
