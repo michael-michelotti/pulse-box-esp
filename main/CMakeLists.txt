@@ -1,6 +1,10 @@
 idf_component_register(
-    SRCS 
-        "main.c" 
-    INCLUDE_DIRS 
+    SRCS
+        "main.c"
+        "esp_led_driver.c"
+    INCLUDE_DIRS
         "."
+    REQUIRES
+        pulse_engine
+        esp_timer
 )
