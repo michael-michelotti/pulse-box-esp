@@ -1,0 +1,10 @@
+idf_component_register(
+    SRCS
+        "src/canvas.c"
+        "src/effects.c"
+        "src/led_math.c"
+        "src/mappings.c"
+        "src/renderer.c"
+    INCLUDE_DIRS
+        "include"
+)
