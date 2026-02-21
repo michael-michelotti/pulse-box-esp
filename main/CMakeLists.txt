@@ -10,4 +10,8 @@ idf_component_register(
         pulse_engine
         esp_timer
         esp_driver_uart
+        esp_wifi
+        esp_netif
+        nvs_flash
+        lwip
 )
