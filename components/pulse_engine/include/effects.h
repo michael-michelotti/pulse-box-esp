@@ -44,5 +44,6 @@ extern const Effect_t fire_effect;
 extern const Effect_t breathe_effect;
 extern const Effect_t wipe_effect;
 extern const Effect_t spectrum_effect;
+extern const Effect_t image_effect;
 
 #endif /* INC_EFFECTS_H_ */

@@ -6,8 +6,15 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_system.h"
+#include "console.h"
 #include "effects.h"
 #include "led_math.h"
+#include "tcp_cmd_server.h"
+
+/* WiFi credential storage — defined in main.c */
+extern bool wifi_creds_save(const char *ssid, const char *password);
+extern bool wifi_is_ap_mode;
 
 #define CONSOLE_UART_NUM    UART_NUM_0
 #define CONSOLE_BUF_SIZE    256
@@ -28,12 +35,13 @@ static const char welcome_message[] =
 
 static const char help_text[] =
         "Command Menu:\r\n"
-        "  effect <rainbow|bass|twinkle|solid|splash|fire|breathe|wipe|spectrum>\r\n"
+        "  effect <rainbow|bass|twinkle|solid|splash|fire|breathe|wipe|spectrum|image>\r\n"
         "  color <r> <g> <b>     - set color (integer 0-255)\r\n"
         "  palette <rainbow|fire> - set palette\r\n"
         "  speed <float>          - set speed (decimal 0-1)\r\n"
         "  brightness <%>         - global brightness 0-100%\r\n"
         "  direction <degrees>    - set direction (0-360)\r\n"
+        "  wifi <ssid> <password>  - set WiFi credentials and reboot\r\n"
         "  status                 - show current settings\r\n"
         "  help                   - show this menu\r\n";
 
@@ -42,9 +50,17 @@ static void console_print(const char *msg, uint16_t len)
     uart_write_bytes(CONSOLE_UART_NUM, msg, len);
 }
 
-static void process_user_command(void)
+void process_user_command(const char *cmd_line, char *resp, size_t resp_size)
 {
-    char *cmd = strtok(cmd_buffer, " ");
+    /* Work on a mutable copy since strtok modifies the string */
+    char buf[CONSOLE_BUF_SIZE];
+    strncpy(buf, cmd_line, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    resp[0] = '\0';
+    bool state_changed = false;
+
+    char *cmd = strtok(buf, " ");
     if (cmd == NULL) return;
     char *arg = strtok(NULL, " ");
 
@@ -77,38 +93,38 @@ static void process_user_command(void)
         else if (strcmp(arg, "spectrum") == 0) {
             current_effect = &spectrum_effect;
         }
+        else if (strcmp(arg, "image") == 0) {
+            current_effect = &image_effect;
+        }
         else {
-            char msg[64];
-            snprintf(msg, sizeof(msg), "unknown effect '%s'\r\n", arg);
-            console_print(msg, strlen(msg));
+            snprintf(resp, resp_size, "unknown effect '%s'\r\n", arg);
             return;
         }
-        char msg[64];
-        snprintf(msg, sizeof(msg), "changed effect to %s\r\n", current_effect->name);
-        console_print(msg, strlen(msg));
+        snprintf(resp, resp_size, "changed effect to %s\r\n", current_effect->name);
+        state_changed = true;
     }
 
     /*** HELP MENU ***/
     else if (strcmp(cmd, "help") == 0) {
-        console_print(help_text, strlen(help_text));
+        snprintf(resp, resp_size, "%s", help_text);
     }
 
     /*** CURRENT STATUS PRINTOUT ***/
     else if (strcmp(cmd, "status") == 0) {
-        char status[128];
-        snprintf(status, sizeof(status),
+        snprintf(resp, resp_size,
                 "Current Status:\r\n"
+                "  wifi: %s\r\n"
                 "  effect: %s\r\n"
                 "  color: r: %d, g: %d, b: %d\r\n"
                 "  speed: %.2f/1.00\r\n"
                 "  brightness: %u%%\r\n",
+                wifi_is_ap_mode ? "AP (setup mode)" : "STA (connected)",
                 current_effect->name,
                 effect_params.color_set->colors[0].r,
                 effect_params.color_set->colors[0].g,
                 effect_params.color_set->colors[0].b,
                 effect_params.speed,
                 effect_params.brightness);
-        console_print(status, strlen(status));
     }
 
     /*** EFFECT COLOR CONTROL ***/
@@ -118,48 +134,47 @@ static void process_user_command(void)
         if (arg) effect_params.color_set->colors[0].g = atoi(arg);
         arg = strtok(NULL, " ");
         if (arg) effect_params.color_set->colors[0].b = atoi(arg);
+        snprintf(resp, resp_size, "changed color to r: %d, g: %d, b: %d\r\n",
+                effect_params.color_set->colors[0].r,
+                effect_params.color_set->colors[0].g,
+                effect_params.color_set->colors[0].b);
+        state_changed = true;
     }
 
     /*** EFFECT SPEED CONTROL ***/
     else if (strcmp(cmd, "speed") == 0 && arg != NULL) {
-        char msg[64];
         float speed = atof(arg);
         if (speed < 0 || speed > 1) {
-            snprintf(msg, sizeof(msg), "invalid speed '%.2f'\r\n", speed);
-            console_print(msg, strlen(msg));
+            snprintf(resp, resp_size, "invalid speed '%.2f'\r\n", speed);
             return;
         }
         effect_params.speed = speed;
-        snprintf(msg, sizeof(msg), "changed speed to %.2f\r\n", effect_params.speed);
-        console_print(msg, strlen(msg));
+        snprintf(resp, resp_size, "changed speed to %.2f\r\n", effect_params.speed);
+        state_changed = true;
     }
 
     /*** GLOBAL BRIGHTNESS CONTROL ***/
     else if (strcmp(cmd, "brightness") == 0 && arg != NULL) {
-        char msg[64];
         uint8_t brightness = atoi(arg);
         if (brightness > 100) {
-            snprintf(msg, sizeof(msg), "invalid brightness '%u'\r\n", brightness);
-            console_print(msg, strlen(msg));
+            snprintf(resp, resp_size, "invalid brightness '%u'\r\n", brightness);
             return;
         }
         effect_params.brightness = brightness;
-        snprintf(msg, sizeof(msg), "changed brightness to %u%%\r\n", effect_params.brightness);
-        console_print(msg, strlen(msg));
+        snprintf(resp, resp_size, "changed brightness to %u%%\r\n", effect_params.brightness);
+        state_changed = true;
     }
 
     /*** EFFECT DIRECTION CONTROL ***/
     else if (strcmp(cmd, "direction") == 0 && arg != NULL) {
-        char msg[64];
         float dir = atof(arg);
         if (dir < 0 || dir > 360) {
-            snprintf(msg, sizeof(msg), "invalid direction '%f'\r\n", dir);
-            console_print(msg, strlen(msg));
+            snprintf(resp, resp_size, "invalid direction '%f'\r\n", dir);
             return;
         }
         effect_params.direction = dir;
-        snprintf(msg, sizeof(msg), "changed direction to %f degrees\r\n", effect_params.direction);
-        console_print(msg, strlen(msg));
+        snprintf(resp, resp_size, "changed direction to %f degrees\r\n", effect_params.direction);
+        state_changed = true;
     }
 
     /*** PALETTE CONTROL ***/
@@ -171,21 +186,43 @@ static void process_user_command(void)
             effect_params.palette = &fire_palette;
         }
         else {
-            char msg[64];
-            snprintf(msg, sizeof(msg), "unknown palette '%s'\r\n", arg);
-            console_print(msg, strlen(msg));
+            snprintf(resp, resp_size, "unknown palette '%s'\r\n", arg);
             return;
         }
-        char msg[64];
-        snprintf(msg, sizeof(msg), "changed palette to %s\r\n", effect_params.palette->name);
-        console_print(msg, strlen(msg));
+        snprintf(resp, resp_size, "changed palette to %s\r\n", effect_params.palette->name);
+        state_changed = true;
+    }
+
+    /*** WIFI CREDENTIAL CONFIGURATION ***/
+    else if (strcmp(cmd, "wifi") == 0 && arg != NULL) {
+        char *pass = strtok(NULL, "");  /* rest of line is password (may contain spaces) */
+        if (pass == NULL) {
+            snprintf(resp, resp_size, "usage: wifi <ssid> <password>\r\n");
+            return;
+        }
+        /* skip leading whitespace in password */
+        while (*pass == ' ') pass++;
+        if (*pass == '\0') {
+            snprintf(resp, resp_size, "usage: wifi <ssid> <password>\r\n");
+            return;
+        }
+        if (wifi_creds_save(arg, pass)) {
+            snprintf(resp, resp_size, "WiFi credentials saved for '%s', rebooting...\r\n", arg);
+            /* Give time for the response to be sent before rebooting */
+            vTaskDelay(pdMS_TO_TICKS(500));
+            esp_restart();
+        } else {
+            snprintf(resp, resp_size, "failed to save WiFi credentials\r\n");
+        }
     }
 
     /*** UNKNOWN COMMAND ***/
     else {
-        char msg[64];
-        snprintf(msg, sizeof(msg), "unknown command '%s'\r\n", cmd);
-        console_print(msg, strlen(msg));
+        snprintf(resp, resp_size, "unknown command '%s'\r\n", cmd);
+    }
+
+    if (state_changed) {
+        tcp_push_status();
     }
 }
 
@@ -218,7 +255,11 @@ void console_task(void *pvParameters)
             cmd_buffer[rx_index] = '\0';
             console_print("\r\n", 2);
             if (rx_index > 0) {
-                process_user_command();
+                char resp[1024];
+                process_user_command(cmd_buffer, resp, sizeof(resp));
+                if (resp[0] != '\0') {
+                    console_print(resp, strlen(resp));
+                }
             }
             rx_index = 0;
             console_print("> ", 2);

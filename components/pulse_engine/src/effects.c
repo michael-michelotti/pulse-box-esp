@@ -418,6 +418,29 @@ static void spectrum_compute(const Canvas_t *canvas, const FrameState_t *frame,
 }
 
 
+/***** IMAGE EFFECT - DISPLAYS PIXEL DATA STREAMED FROM DESKTOP APP ********/
+extern uint8_t pixel_frame_buf[];
+extern volatile bool pixel_frame_ready;
+
+static void image_compute(const Canvas_t *canvas, const FrameState_t *frame,
+		const EffectParams_t *params, const Mapping_t *mapping,
+		uint8_t *framebuffer) {
+
+	if (!pixel_frame_ready) return;
+
+	int grid_w = canvas->max_x - canvas->min_x + 1;
+
+	for (int i = 0; i < canvas->num_pixels; i++) {
+		int x = canvas->pixels[i].x;
+		int y = canvas->pixels[i].y;
+		int src = (y * grid_w + x) * 3;
+		int dst = canvas->pixels[i].led_index * 3;
+		framebuffer[dst + 0] = pixel_frame_buf[src + 0];
+		framebuffer[dst + 1] = pixel_frame_buf[src + 1];
+		framebuffer[dst + 2] = pixel_frame_buf[src + 2];
+	}
+}
+
 /* Export of all available effects; must also be externed in effects.h, effects.h include gives access to all effects */
 const Effect_t bass_pulse_effect = { .name = "bass", .compute = bass_pulse_compute };
 const Effect_t rainbow_effect = { .name = "rainbow", .compute = rainbow_compute };
@@ -428,3 +451,4 @@ const Effect_t fire_effect = { .name = "fire", .compute = fire_compute };
 const Effect_t breathe_effect = { .name = "breathe", .compute = breathe_compute };
 const Effect_t wipe_effect = { .name = "wipe", .compute = wipe_compute };
 const Effect_t spectrum_effect = { .name = "spectrum", .compute = spectrum_compute };
+const Effect_t image_effect = { .name = "image", .compute = image_compute };

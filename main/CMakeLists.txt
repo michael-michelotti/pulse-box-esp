@@ -4,6 +4,8 @@ idf_component_register(
         "esp_led_driver.c"
         "console.c"
         "wifi_audio.c"
+        "tcp_cmd_server.c"
+        "protocol.c"
     INCLUDE_DIRS
         "."
     REQUIRES
