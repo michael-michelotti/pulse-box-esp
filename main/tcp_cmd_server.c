@@ -26,6 +26,7 @@ static volatile int tcp_client_sock = -1;
 static uint8_t payload_buf[FRAME_MAX_PAYLOAD];
 static char cmd_text[256];
 static char resp_text[1024];
+static uint8_t resp_buf[1 + 1024]; /* success byte + response text */
 static uint8_t status_buf[128];
 
 static void handle_client(int client_sock)
@@ -73,11 +74,13 @@ static void handle_client(int client_sock)
             cmd_text[cmd_len] = '\0';
 
             /* Process command using existing shared handler */
-            process_user_command(cmd_text, resp_text, sizeof(resp_text));
+            bool ok = process_user_command(cmd_text, resp_text, sizeof(resp_text));
 
-            /* Send text response as CMD_RESP */
-            uint16_t rlen = (uint16_t)strlen(resp_text);
-            proto_send_frame(client_sock, MSG_CMD_RESP, resp_text, rlen);
+            /* Send CMD_RESP: [success: u8][response_text: ...] */
+            uint16_t text_len = (uint16_t)strlen(resp_text);
+            resp_buf[0] = ok ? 1 : 0;
+            memcpy(resp_buf + 1, resp_text, text_len);
+            proto_send_frame(client_sock, MSG_CMD_RESP, resp_buf, 1 + text_len);
 
             /* Push STATUS after state-changing commands */
             if (strncmp(cmd_text, "help", 4) != 0 &&

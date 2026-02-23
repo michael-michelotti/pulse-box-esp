@@ -50,7 +50,7 @@ static void console_print(const char *msg, uint16_t len)
     uart_write_bytes(CONSOLE_UART_NUM, msg, len);
 }
 
-void process_user_command(const char *cmd_line, char *resp, size_t resp_size)
+bool process_user_command(const char *cmd_line, char *resp, size_t resp_size)
 {
     /* Work on a mutable copy since strtok modifies the string */
     char buf[CONSOLE_BUF_SIZE];
@@ -61,7 +61,7 @@ void process_user_command(const char *cmd_line, char *resp, size_t resp_size)
     bool state_changed = false;
 
     char *cmd = strtok(buf, " ");
-    if (cmd == NULL) return;
+    if (cmd == NULL) return true;
     char *arg = strtok(NULL, " ");
 
     /*** EFFECT CONTROLS ***/
@@ -98,7 +98,7 @@ void process_user_command(const char *cmd_line, char *resp, size_t resp_size)
         }
         else {
             snprintf(resp, resp_size, "unknown effect '%s'\r\n", arg);
-            return;
+            return false;
         }
         snprintf(resp, resp_size, "changed effect to %s\r\n", current_effect->name);
         state_changed = true;
@@ -146,7 +146,7 @@ void process_user_command(const char *cmd_line, char *resp, size_t resp_size)
         float speed = atof(arg);
         if (speed < 0 || speed > 1) {
             snprintf(resp, resp_size, "invalid speed '%.2f'\r\n", speed);
-            return;
+            return false;
         }
         effect_params.speed = speed;
         snprintf(resp, resp_size, "changed speed to %.2f\r\n", effect_params.speed);
@@ -158,7 +158,7 @@ void process_user_command(const char *cmd_line, char *resp, size_t resp_size)
         uint8_t brightness = atoi(arg);
         if (brightness > 100) {
             snprintf(resp, resp_size, "invalid brightness '%u'\r\n", brightness);
-            return;
+            return false;
         }
         effect_params.brightness = brightness;
         snprintf(resp, resp_size, "changed brightness to %u%%\r\n", effect_params.brightness);
@@ -170,7 +170,7 @@ void process_user_command(const char *cmd_line, char *resp, size_t resp_size)
         float dir = atof(arg);
         if (dir < 0 || dir > 360) {
             snprintf(resp, resp_size, "invalid direction '%f'\r\n", dir);
-            return;
+            return false;
         }
         effect_params.direction = dir;
         snprintf(resp, resp_size, "changed direction to %f degrees\r\n", effect_params.direction);
@@ -187,7 +187,7 @@ void process_user_command(const char *cmd_line, char *resp, size_t resp_size)
         }
         else {
             snprintf(resp, resp_size, "unknown palette '%s'\r\n", arg);
-            return;
+            return false;
         }
         snprintf(resp, resp_size, "changed palette to %s\r\n", effect_params.palette->name);
         state_changed = true;
@@ -198,13 +198,13 @@ void process_user_command(const char *cmd_line, char *resp, size_t resp_size)
         char *pass = strtok(NULL, "");  /* rest of line is password (may contain spaces) */
         if (pass == NULL) {
             snprintf(resp, resp_size, "usage: wifi <ssid> <password>\r\n");
-            return;
+            return false;
         }
         /* skip leading whitespace in password */
         while (*pass == ' ') pass++;
         if (*pass == '\0') {
             snprintf(resp, resp_size, "usage: wifi <ssid> <password>\r\n");
-            return;
+            return false;
         }
         if (wifi_creds_save(arg, pass)) {
             snprintf(resp, resp_size, "WiFi credentials saved for '%s', rebooting...\r\n", arg);
@@ -219,11 +219,16 @@ void process_user_command(const char *cmd_line, char *resp, size_t resp_size)
     /*** UNKNOWN COMMAND ***/
     else {
         snprintf(resp, resp_size, "unknown command '%s'\r\n", cmd);
+        if (state_changed) {
+            tcp_push_status();
+        }
+        return false;
     }
 
     if (state_changed) {
         tcp_push_status();
     }
+    return true;
 }
 
 void console_init(void)
