@@ -10,6 +10,7 @@
 #include "tcp_cmd_server.h"
 #include "console.h"
 #include "protocol.h"
+#include "renderer.h"
 
 extern Canvas_t canvas;
 
@@ -28,13 +29,18 @@ static char cmd_text[256];
 static char resp_text[1024];
 static uint8_t resp_buf[1 + 1024]; /* success byte + response text */
 static uint8_t status_buf[128];
+static uint8_t preview_send_buf[MAX_PIXELS * 3];
 
 static void handle_client(int client_sock)
 {
     FrameHeader_t hdr;
 
     ESP_LOGI(TAG, "Client connected (TLV protocol)");
-    tcp_client_sock = client_sock;
+
+    /* Wait for HELLO before exposing socket to other tasks (preview/status push).
+     * This prevents the render task from pushing PREVIEW_FRAMEs before the
+     * client has completed the handshake. */
+    bool handshake_done = false;
 
     while (1) {
         /* Read 3-byte frame header */
@@ -62,6 +68,11 @@ static void handle_client(int client_sock)
             int slen = proto_build_status(status_buf, sizeof(status_buf));
             if (slen > 0) {
                 proto_send_frame(client_sock, MSG_STATUS, status_buf, slen);
+            }
+            /* Handshake complete — allow preview/status pushes from other tasks */
+            if (!handshake_done) {
+                tcp_client_sock = client_sock;
+                handshake_done = true;
             }
             break;
         }
@@ -126,6 +137,16 @@ void tcp_push_status(void)
     if (slen > 0) {
         proto_send_frame(sock, MSG_STATUS, buf, slen);
     }
+}
+
+void tcp_push_preview(void)
+{
+    int sock = tcp_client_sock;
+    if (sock < 0) return;
+
+    int size = canvas.num_pixels * 3;
+    renderer_get_preview(preview_send_buf, &canvas);
+    proto_send_frame(sock, MSG_PREVIEW_FRAME, preview_send_buf, size);
 }
 
 void tcp_cmd_server_task(void *pvParameters)

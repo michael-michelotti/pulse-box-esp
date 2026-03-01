@@ -12,8 +12,9 @@
 #define MSG_PIXEL_FRAME  0x03
 
 /* Server (ESP32) -> Client (desktop): 0x80-0xFF */
-#define MSG_STATUS       0x81
-#define MSG_CMD_RESP     0x82
+#define MSG_STATUS        0x81
+#define MSG_CMD_RESP      0x82
+#define MSG_PREVIEW_FRAME 0x83
 
 #define PROTOCOL_VERSION 1
 

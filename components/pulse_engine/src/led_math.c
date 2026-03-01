@@ -214,6 +214,7 @@ void init_gamma_table(float gamma) {
 	float inv_gamma = 1.0f / gamma;
 	for (int i = 1; i < 256; i++) {
 		gammaT[i] = (int32_t)(powf((float)i / 255.0f, gamma) * 255.0f + 0.5f);
+		if (gammaT[i] == 0) gammaT[i] = 1;  /* non-zero in → non-zero out */
 		inv_gammaT[i] = (int32_t)(powf(((float)i - 0.5f) / 255.0f, inv_gamma) * 255.0f + 0.5f);
 	}
 }

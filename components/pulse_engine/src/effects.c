@@ -173,7 +173,7 @@ static void rainbow_compute(const Canvas_t *canvas, const FrameState_t *frame,
 	for (int i = 0; i < canvas->num_pixels; i++) {
 		float proj = canvas->pixels[i].x * dir_x + canvas->pixels[i].y * dir_y;
 		float norm = (proj - min_proj) / range;
-		float pos = fmodf(norm + frame->time * params->speed, 1.0f);
+		float pos = fmodf(norm - frame->time * params->speed + 1.0f, 1.0f);
 		uint8_t index = (uint8_t)(pos * 255.0f);
 
 		int idx = canvas->pixels[i].led_index * 3;
@@ -452,3 +452,4 @@ const Effect_t breathe_effect = { .name = "breathe", .compute = breathe_compute 
 const Effect_t wipe_effect = { .name = "wipe", .compute = wipe_compute };
 const Effect_t spectrum_effect = { .name = "spectrum", .compute = spectrum_compute };
 const Effect_t image_effect = { .name = "image", .compute = image_compute };
+const Effect_t gif_effect = { .name = "gif", .compute = image_compute };

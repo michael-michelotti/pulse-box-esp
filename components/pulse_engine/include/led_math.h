@@ -42,6 +42,10 @@ typedef struct {
 WRGB_t hsv_to_rgb(HSV_t hsv);
 WRGB_t hsv_to_rgb_yellow_corrected(HSV_t hsv);
 
+WRGB_t blend_colors(WRGB_t c1, WRGB_t c2, uint8_t blend);
+WRGB_t add_colors(WRGB_t c1, WRGB_t c2, bool preserve_ratio);
+WRGB_t dim_color(WRGB_t c1, uint8_t dim);
+
 uint8_t gamma_correct(uint8_t value);
 void init_gamma_table(float gamma);
 

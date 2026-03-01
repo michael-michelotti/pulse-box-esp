@@ -235,6 +235,7 @@ static void render_task(void *pvParameters)
     FrameState_t frame = {0};
     float prev_time = 0;
     int64_t last_frame_us = 0;
+    int preview_counter = 0;
 
     while (1) {
         int64_t now = esp_timer_get_time();
@@ -246,6 +247,12 @@ static void render_task(void *pvParameters)
             renderer_render_frame(&canvas, &frame, current_effect,
                                   &effect_params, current_mapping,
                                   &esp32_ws2812b_driver);
+
+            /* Push live preview to desktop at ~1 Hz */
+            if (++preview_counter >= 30) {
+                preview_counter = 0;
+                tcp_push_preview();
+            }
 
             last_frame_us = now;
         }

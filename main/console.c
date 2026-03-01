@@ -16,7 +16,7 @@
 extern bool wifi_creds_save(const char *ssid, const char *password);
 extern bool wifi_is_ap_mode;
 
-#define CONSOLE_UART_NUM    UART_NUM_0
+#define CONSOLE_UART_NUM    UART_NUM_1
 #define CONSOLE_BUF_SIZE    256
 
 static const char *TAG = "console";
@@ -35,7 +35,7 @@ static const char welcome_message[] =
 
 static const char help_text[] =
         "Command Menu:\r\n"
-        "  effect <rainbow|bass|twinkle|solid|splash|fire|breathe|wipe|spectrum|image>\r\n"
+        "  effect <rainbow|bass|twinkle|solid|splash|fire|breathe|wipe|spectrum|image|gif>\r\n"
         "  color <r> <g> <b>     - set color (integer 0-255)\r\n"
         "  palette <rainbow|fire> - set palette\r\n"
         "  speed <float>          - set speed (decimal 0-1)\r\n"
@@ -95,6 +95,9 @@ bool process_user_command(const char *cmd_line, char *resp, size_t resp_size)
         }
         else if (strcmp(arg, "image") == 0) {
             current_effect = &image_effect;
+        }
+        else if (strcmp(arg, "gif") == 0) {
+            current_effect = &gif_effect;
         }
         else {
             snprintf(resp, resp_size, "unknown effect '%s'\r\n", arg);
