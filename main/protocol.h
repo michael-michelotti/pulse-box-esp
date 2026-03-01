@@ -28,15 +28,21 @@ typedef struct __attribute__((packed)) {
     uint16_t length;    /* little-endian, native on ESP32 + x86 */
 } FrameHeader_t;
 
-/* --- STATUS payload fixed portion (18 bytes) --- */
+/* --- STATUS payload fixed portion (24 bytes) --- */
 
 typedef struct __attribute__((packed)) {
     uint8_t  protocol_ver;
     uint8_t  wifi_mode;     /* 0 = STA, 1 = AP */
     uint8_t  brightness;    /* 0-100 */
-    uint8_t  color_r;
+    uint8_t  color_r;       /* colors[0] */
     uint8_t  color_g;
     uint8_t  color_b;
+    uint8_t  color2_r;      /* colors[1] */
+    uint8_t  color2_g;
+    uint8_t  color2_b;
+    uint8_t  color3_r;      /* colors[2] */
+    uint8_t  color3_g;
+    uint8_t  color3_b;
     float    speed;         /* 0.0-1.0 */
     float    direction;     /* 0-360 */
     uint8_t  grid_width;

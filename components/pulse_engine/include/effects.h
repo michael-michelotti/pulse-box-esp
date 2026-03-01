@@ -46,5 +46,6 @@ extern const Effect_t wipe_effect;
 extern const Effect_t spectrum_effect;
 extern const Effect_t image_effect;
 extern const Effect_t gif_effect;
+extern const Effect_t tunnel_effect;
 
 #endif /* INC_EFFECTS_H_ */

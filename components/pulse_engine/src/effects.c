@@ -1,6 +1,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 #include "effects.h"
 #include "audio.h"
@@ -12,12 +13,9 @@
 // multi-color pulse - waves/pulses from various origins based on frequency (red for high, blue for low)
 // advanced color effects - responds to harmony, frequency content deltas, creates advanced effects
 // rotating circle, concentric circles
-// tunnel - effect of moving through a tunnel by generating various shapes and growing them to make them appear "closer"
 // tetris - randomly falling tetris pieces
 // multi-color twinkle
 // color bars (rainbow but not all colors in the spectrum) - width should control band width
-// image (processed by PC app)
-// video (processed by PC app, sent as raw data)
 // snake game simulation
 // draw mode - (processed by PC app, sent as raw data)
 // maybe add mic and do mic-mode for all audio modes?
@@ -28,7 +26,7 @@
 
 
 /***** BASS MAGNITUDE HELPER - EXTRACTS BASS ENERGY FROM FFT BINS 1-4 ********/
-static float compute_bass_magnitude(const AudioState_t *audio)
+static float compute_bass_magnitude(const AudioState_t *audio, uint8_t sensitivity)
 {
 	float bass_mag = 0.0f;
 	for (int i = 1; i <= 4; i++) {
@@ -37,7 +35,11 @@ static float compute_bass_magnitude(const AudioState_t *audio)
 		bass_mag += sqrtf(real * real + imag * imag);
 	}
 	float db = 20.0f * log10f(bass_mag + 1.0f);
-	return fminf(fmaxf((db - 60.0f) * (255.0f / 40.0f), 0.0f), 255.0f);
+	/* sensitivity 0-100 controls dB floor:
+	   100 = floor at 65 (very sensitive), 0 = floor at 95 (only hard bass hits).
+	   30 dB window above floor maps to 0-255. */
+	float db_floor = 105.0f - sensitivity * 0.3f;
+	return fminf(fmaxf((db - db_floor) * (255.0f / 30.0f), 0.0f), 255.0f);
 }
 
 
@@ -54,10 +56,9 @@ static void bass_pulse_compute(const Canvas_t *canvas, const FrameState_t *frame
 	static AudioState_t audio;
 	audio_update(&audio);
 
-	float bass = compute_bass_magnitude(&audio);
-	float scale = 0.5f + params->sensitivity * 0.015f;
-	float target = fminf(bass * scale, 255.0f);
-	// float target = fminf(audio.bass_magnitude, 255.0f);
+	float bass = compute_bass_magnitude(&audio, params->sensitivity);
+
+	float target = fminf(bass, 255.0f);
 
 	if (target >= current_brightness) {
 		current_brightness = target;
@@ -67,12 +68,12 @@ static void bass_pulse_compute(const Canvas_t *canvas, const FrameState_t *frame
 			current_brightness = BASS_MIN_BRIGHTNESS;
 	}
 
-	uint8_t brightness = (uint8_t)current_brightness;
+	WRGB_t color = dim_color(params->color_set->colors[0], (uint8_t)current_brightness);
 	for (int i = 0; i < canvas->num_pixels; i++) {
 		int idx = canvas->pixels[i].led_index * 3;
-			framebuffer[idx + 0] = (params->color_set->colors[0].r * brightness) / 255;
-			framebuffer[idx + 1] = (params->color_set->colors[0].g * brightness) / 255;
-			framebuffer[idx + 2] = (params->color_set->colors[0].b * brightness) / 255;
+		framebuffer[idx + 0] = color.r;
+		framebuffer[idx + 1] = color.g;
+		framebuffer[idx + 2] = color.b;
 	}
 }
 
@@ -93,14 +94,14 @@ static void bass_splash_compute(const Canvas_t *canvas, const FrameState_t *fram
 
 	float wave_speed = 1.0f + params->speed * 14.0f;
 	float wave_decay = 0.3f + params->speed * 2.7f;
-	float threshold = 150.0f - params->sensitivity * 1.5f;
+	float threshold = 128.0f;
 
 	static Wave_t waves[MAX_WAVES] = {0};
     static AudioState_t audio;
     static uint8_t was_below = 1;  // prevent rapid re-triggering
 
     audio_update(&audio);
-    float bass = compute_bass_magnitude(&audio);
+    float bass = compute_bass_magnitude(&audio, params->sensitivity);
 
     // Spawn wave on bass hit (only if we dropped below threshold since last hit)
     if (bass > threshold && was_below) {
@@ -127,6 +128,7 @@ static void bass_splash_compute(const Canvas_t *canvas, const FrameState_t *fram
     }
 
     // Render
+    WRGB_t base_color = params->color_set->colors[0];
     float center_x = canvas->panels[0].center_x;
     float center_y = canvas->panels[0].center_y;
     for (int i = 0; i < canvas->num_pixels; i++) {
@@ -144,11 +146,12 @@ static void bass_splash_compute(const Canvas_t *canvas, const FrameState_t *fram
             }
         }
 
-        uint8_t b = (uint8_t)(fminf(brightness, 1.0f) * 255.0f);
+        uint8_t bval = (uint8_t)(fminf(brightness, 1.0f) * 255.0f);
         int led = canvas->pixels[i].led_index * 3;
-        framebuffer[led + 0] = (params->color_set->colors[0].r * b) / 255;
-        framebuffer[led + 1] = (params->color_set->colors[0].g * b) / 255;
-        framebuffer[led + 2] = (params->color_set->colors[0].b * b) / 255;
+        WRGB_t dimmed = dim_color(base_color, bval);
+        framebuffer[led + 0] = dimmed.r;
+        framebuffer[led + 1] = dimmed.g;
+        framebuffer[led + 2] = dimmed.b;
     }
 }
 
@@ -202,15 +205,17 @@ static void twinkle_compute(const Canvas_t *canvas, const FrameState_t *frame,
 	}
 
 	// Decay and render
+	WRGB_t base_color = params->color_set->colors[0];
 	for (int i = 0; i < canvas->num_pixels; i++) {
 		brightness[i] -= decay * frame->dt;
 		if (brightness[i] < 0) brightness[i] = 0;
 
-		uint8_t b = (uint8_t)(brightness[i] * 255.0f);
+		uint8_t bval = (uint8_t)(brightness[i] * 255.0f);
 		int led = canvas->pixels[i].led_index * 3;
-		framebuffer[led + 0] = (params->color_set->colors[0].r * b) / 255;
-		framebuffer[led + 1] = (params->color_set->colors[0].g * b) / 255;
-		framebuffer[led + 2] = (params->color_set->colors[0].b * b) / 255;
+		WRGB_t dimmed = dim_color(base_color, bval);
+		framebuffer[led + 0] = dimmed.r;
+		framebuffer[led + 1] = dimmed.g;
+		framebuffer[led + 2] = dimmed.b;
 	}
 }
 
@@ -220,11 +225,12 @@ static void solid_compute(const Canvas_t *canvas, const FrameState_t *frame,
 		const EffectParams_t *params, const Mapping_t *mapping,
 		uint8_t *framebuffer) {
 
+	WRGB_t color = params->color_set->colors[0];
 	for (int i = 0; i < canvas->num_pixels; i++) {
 		int led = canvas->pixels[i].led_index * 3;
-		framebuffer[led + 0] = params->color_set->colors[0].r;
-		framebuffer[led + 1] = params->color_set->colors[0].g;
-		framebuffer[led + 2] = params->color_set->colors[0].b;
+		framebuffer[led + 0] = color.r;
+		framebuffer[led + 1] = color.g;
+		framebuffer[led + 2] = color.b;
 	}
 }
 
@@ -295,15 +301,15 @@ static void breathe_compute(const Canvas_t *canvas, const FrameState_t *frame,
         uint8_t *framebuffer) {
 
     float breath = (sinf(frame->time * params->speed * M_PI) + 1.0f) * 0.5f;
-    uint8_t b = (uint8_t)(breath * 255.0f);
 
-    WRGB_t color = params->color_set->colors[0];
+    uint8_t bval = (uint8_t)(breath * 255.0f);
+    WRGB_t color = dim_color(params->color_set->colors[0], bval);
 
     for (int i = 0; i < canvas->num_pixels; i++) {
         int led = canvas->pixels[i].led_index * 3;
-        framebuffer[led + 0] = (color.r * b) / 255;
-        framebuffer[led + 1] = (color.g * b) / 255;
-        framebuffer[led + 2] = (color.b * b) / 255;
+        framebuffer[led + 0] = color.r;
+        framebuffer[led + 1] = color.g;
+        framebuffer[led + 2] = color.b;
     }
 }
 
@@ -316,8 +322,6 @@ static void wipe_compute(const Canvas_t *canvas, const FrameState_t *frame,
 	static float accum = 0.0f;
 	static float brightness = 255.0f;
 	static bool filling = true;
-
-	WRGB_t color = params->color_set->colors[0];
 
 	if (filling) {
 		accum += frame->dt * params->speed * 20.0f;
@@ -339,13 +343,13 @@ static void wipe_compute(const Canvas_t *canvas, const FrameState_t *frame,
 		}
 	}
 
-	uint8_t b = (uint8_t)brightness;
+	WRGB_t color = dim_color(params->color_set->colors[0], (uint8_t)brightness);
 	for (int i = 0; i < canvas->num_pixels; i++) {
 		int led = canvas->pixels[i].led_index * 3;
 		if (canvas->pixels[i].led_index < lit_count) {
-			framebuffer[led + 0] = (color.r * b) / 255;
-			framebuffer[led + 1] = (color.g * b) / 255;
-			framebuffer[led + 2] = (color.b * b) / 255;
+			framebuffer[led + 0] = color.r;
+			framebuffer[led + 1] = color.g;
+			framebuffer[led + 2] = color.b;
 		}
 	}
 }
@@ -441,6 +445,41 @@ static void image_compute(const Canvas_t *canvas, const FrameState_t *frame,
 	}
 }
 
+/***** TUNNEL EFFECT - CONCENTRIC SQUARES RADIATING OUTWARD USING COLOR SET ********/
+static void tunnel_compute(const Canvas_t *canvas, const FrameState_t *frame,
+        const EffectParams_t *params, const Mapping_t *mapping,
+        uint8_t *framebuffer) {
+
+    float center_x = (canvas->max_x + canvas->min_x) / 2.0f;
+    float center_y = (canvas->max_y + canvas->min_y) / 2.0f;
+    int num_colors = params->color_set->num_colors;
+    if (num_colors < 1) num_colors = 1;
+
+    static float phase = 0.0f;
+    static float accum = 0.0f;
+    accum += frame->dt * (0.5f + params->speed * 4.0f);
+    while (accum >= 1.0f) {
+        phase += 1.0f;
+        accum -= 1.0f;
+    }
+
+    int phase_int = (int)phase;
+
+    for (int i = 0; i < canvas->num_pixels; i++) {
+        float dx = fabsf(canvas->pixels[i].x - center_x);
+        float dy = fabsf(canvas->pixels[i].y - center_y);
+        int ring = (int)fmaxf(dx, dy);
+
+        int color_idx = ((ring - phase_int) % num_colors + num_colors) % num_colors;
+        WRGB_t c = params->color_set->colors[color_idx];
+
+        int led = canvas->pixels[i].led_index * 3;
+        framebuffer[led + 0] = c.r;
+        framebuffer[led + 1] = c.g;
+        framebuffer[led + 2] = c.b;
+    }
+}
+
 /* Export of all available effects; must also be externed in effects.h, effects.h include gives access to all effects */
 const Effect_t bass_pulse_effect = { .name = "bass", .compute = bass_pulse_compute };
 const Effect_t rainbow_effect = { .name = "rainbow", .compute = rainbow_compute };
@@ -453,3 +492,4 @@ const Effect_t wipe_effect = { .name = "wipe", .compute = wipe_compute };
 const Effect_t spectrum_effect = { .name = "spectrum", .compute = spectrum_compute };
 const Effect_t image_effect = { .name = "image", .compute = image_compute };
 const Effect_t gif_effect = { .name = "gif", .compute = image_compute };
+const Effect_t tunnel_effect = { .name = "tunnel", .compute = tunnel_compute };

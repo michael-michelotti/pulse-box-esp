@@ -271,15 +271,17 @@ void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_init());
     }
 
-    // Initialize color set with blue
+    // Initialize color set with 3 default colors
     default_color_set.colors[0] = (WRGB_t){ .r = 0, .g = 0, .b = 255 };
-    default_color_set.num_colors = 1;
+    default_color_set.colors[1] = (WRGB_t){ .r = 255, .g = 0, .b = 0 };
+    default_color_set.colors[2] = (WRGB_t){ .r = 0, .g = 255, .b = 0 };
+    default_color_set.num_colors = 3;
     default_color_set.name = "default";
 
     // Initialize effect params
     effect_params.brightness = 10;
     effect_params.sensitivity = 50;
-    effect_params.speed = 0;
+    effect_params.speed = 0.5;
     effect_params.palette = &rainbow_palette;
     effect_params.color_set = &default_color_set;
 

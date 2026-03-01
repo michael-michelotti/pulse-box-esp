@@ -83,7 +83,7 @@ WRGB_t hsv_to_rgb_base(HSV_t hsv, bool correct_yellow) {
 		return (WRGB_t){ .raw = (v << 16 | v << 8 | v) };
 	}
 
-	sector    = h / 10923;
+	sector = h / 10923;
 	remainder = (h - (sector * 10923)) * 6;
 	p = (v * (255 - s)) >> 8;
 	q = (v * (255 - ((s * remainder) >> 16))) >> 8;
@@ -156,10 +156,10 @@ HSV_t rgb_to_hsv(WRGB_t rgb) {
 		h_val = (10923 * (int32_t)(g - b)) / (int32_t)delta;
 	}
 	else if (max == g) {
-		h_val = (10923 * (int32_t)(b - r)) / (int32_t)delta;
+		h_val = 21845 + (10923 * (int32_t)(b - r)) / (int32_t)delta;
 	}
 	else {
-		h_val = (10923 * (int32_t)(r - g)) / (int32_t)delta;
+		h_val = 43690 + (10923 * (int32_t)(r - g)) / (int32_t)delta;
 	}
 
 	if (h_val < 0) h_val += 65536;
@@ -204,9 +204,9 @@ WRGB_t add_colors(WRGB_t c1, WRGB_t c2, bool preserve_ratio) {
 
 /* return c1 with the same color ratio, but all colors reduced by dim/255 percent */
 WRGB_t dim_color(WRGB_t c1, uint8_t dim) {
-	dim += 1;
-	uint32_t rb = (((c1.raw & TWO_CHANNEL_MASK) * dim) >> 8) & TWO_CHANNEL_MASK;
-	uint32_t wg = (((c1.raw >> 8) & TWO_CHANNEL_MASK) * dim) & ~TWO_CHANNEL_MASK;
+	uint32_t d = (uint32_t)dim + 1;
+	uint32_t rb = (((c1.raw & TWO_CHANNEL_MASK) * d) >> 8) & TWO_CHANNEL_MASK;
+	uint32_t wg = (((c1.raw >> 8) & TWO_CHANNEL_MASK) * d) & ~TWO_CHANNEL_MASK;
 	return (WRGB_t) { .raw = rb | wg };
 }
 

@@ -41,6 +41,7 @@ typedef struct {
 
 WRGB_t hsv_to_rgb(HSV_t hsv);
 WRGB_t hsv_to_rgb_yellow_corrected(HSV_t hsv);
+HSV_t rgb_to_hsv(WRGB_t rgb);
 
 WRGB_t blend_colors(WRGB_t c1, WRGB_t c2, uint8_t blend);
 WRGB_t add_colors(WRGB_t c1, WRGB_t c2, bool preserve_ratio);

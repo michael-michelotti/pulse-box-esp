@@ -16,7 +16,7 @@
 extern bool wifi_creds_save(const char *ssid, const char *password);
 extern bool wifi_is_ap_mode;
 
-#define CONSOLE_UART_NUM    UART_NUM_1
+#define CONSOLE_UART_NUM    UART_NUM_0
 #define CONSOLE_BUF_SIZE    256
 
 static const char *TAG = "console";
@@ -35,10 +35,12 @@ static const char welcome_message[] =
 
 static const char help_text[] =
         "Command Menu:\r\n"
-        "  effect <rainbow|bass|twinkle|solid|splash|fire|breathe|wipe|spectrum|image|gif>\r\n"
-        "  color <r> <g> <b>     - set color (integer 0-255)\r\n"
+        "  effect <rainbow|bass|twinkle|solid|splash|fire|breathe|wipe|spectrum|image|gif|tunnel>\r\n"
+        "  color <r> <g> <b>           - set primary color (0-255)\r\n"
+        "  color <index> <r> <g> <b>   - set color by index (0-2)\r\n"
         "  palette <rainbow|fire> - set palette\r\n"
         "  speed <float>          - set speed (decimal 0-1)\r\n"
+        "  sensitivity <0-100>    - set audio sensitivity\r\n"
         "  brightness <%>         - global brightness 0-100%\r\n"
         "  direction <degrees>    - set direction (0-360)\r\n"
         "  wifi <ssid> <password>  - set WiFi credentials and reboot\r\n"
@@ -99,6 +101,9 @@ bool process_user_command(const char *cmd_line, char *resp, size_t resp_size)
         else if (strcmp(arg, "gif") == 0) {
             current_effect = &gif_effect;
         }
+        else if (strcmp(arg, "tunnel") == 0) {
+            current_effect = &tunnel_effect;
+        }
         else {
             snprintf(resp, resp_size, "unknown effect '%s'\r\n", arg);
             return false;
@@ -118,29 +123,54 @@ bool process_user_command(const char *cmd_line, char *resp, size_t resp_size)
                 "Current Status:\r\n"
                 "  wifi: %s\r\n"
                 "  effect: %s\r\n"
-                "  color: r: %d, g: %d, b: %d\r\n"
+                "  color[0]: r: %d, g: %d, b: %d\r\n"
+                "  color[1]: r: %d, g: %d, b: %d\r\n"
+                "  color[2]: r: %d, g: %d, b: %d\r\n"
                 "  speed: %.2f/1.00\r\n"
+                "  sensitivity: %u\r\n"
                 "  brightness: %u%%\r\n",
                 wifi_is_ap_mode ? "AP (setup mode)" : "STA (connected)",
                 current_effect->name,
                 effect_params.color_set->colors[0].r,
                 effect_params.color_set->colors[0].g,
                 effect_params.color_set->colors[0].b,
+                effect_params.color_set->colors[1].r,
+                effect_params.color_set->colors[1].g,
+                effect_params.color_set->colors[1].b,
+                effect_params.color_set->colors[2].r,
+                effect_params.color_set->colors[2].g,
+                effect_params.color_set->colors[2].b,
                 effect_params.speed,
+                effect_params.sensitivity,
                 effect_params.brightness);
     }
 
     /*** EFFECT COLOR CONTROL ***/
     else if (strcmp(cmd, "color") == 0 && arg != NULL) {
-        effect_params.color_set->colors[0].r = atoi(arg);
-        arg = strtok(NULL, " ");
-        if (arg) effect_params.color_set->colors[0].g = atoi(arg);
-        arg = strtok(NULL, " ");
-        if (arg) effect_params.color_set->colors[0].b = atoi(arg);
-        snprintf(resp, resp_size, "changed color to r: %d, g: %d, b: %d\r\n",
-                effect_params.color_set->colors[0].r,
-                effect_params.color_set->colors[0].g,
-                effect_params.color_set->colors[0].b);
+        char *arg2 = strtok(NULL, " ");
+        char *arg3 = strtok(NULL, " ");
+        char *arg4 = strtok(NULL, " ");
+
+        if (arg4 != NULL) {
+            /* 4-arg form: color <index> <r> <g> <b> */
+            int idx = atoi(arg);
+            if (idx < 0 || idx > 2) {
+                snprintf(resp, resp_size, "invalid color index %d (0-2)\r\n", idx);
+                return false;
+            }
+            WRGB_t rgb = { .r = atoi(arg2), .g = atoi(arg3), .b = atoi(arg4) };
+            effect_params.color_set->colors[idx] = rgb;
+            snprintf(resp, resp_size, "changed color[%d] to r: %d, g: %d, b: %d\r\n",
+                    idx, rgb.r, rgb.g, rgb.b);
+        } else {
+            /* 3-arg form: color <r> <g> <b> (backward compatible, sets colors[0]) */
+            WRGB_t rgb = { .r = atoi(arg) };
+            if (arg2) rgb.g = atoi(arg2);
+            if (arg3) rgb.b = atoi(arg3);
+            effect_params.color_set->colors[0] = rgb;
+            snprintf(resp, resp_size, "changed color to r: %d, g: %d, b: %d\r\n",
+                    rgb.r, rgb.g, rgb.b);
+        }
         state_changed = true;
     }
 
@@ -153,6 +183,18 @@ bool process_user_command(const char *cmd_line, char *resp, size_t resp_size)
         }
         effect_params.speed = speed;
         snprintf(resp, resp_size, "changed speed to %.2f\r\n", effect_params.speed);
+        state_changed = true;
+    }
+
+    /*** AUDIO SENSITIVITY CONTROL ***/
+    else if (strcmp(cmd, "sensitivity") == 0 && arg != NULL) {
+        uint8_t sensitivity = atoi(arg);
+        if (sensitivity > 100) {
+            snprintf(resp, resp_size, "invalid sensitivity '%u'\r\n", sensitivity);
+            return false;
+        }
+        effect_params.sensitivity = sensitivity;
+        snprintf(resp, resp_size, "changed sensitivity to %u\r\n", effect_params.sensitivity);
         state_changed = true;
     }
 
