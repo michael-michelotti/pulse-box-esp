@@ -9,6 +9,10 @@ uint8_t gammaT[256];
 uint8_t inv_gammaT[256];
 Palette_t rainbow_palette;
 Palette_t fire_palette;
+Palette_t neon_palette;
+Palette_t ocean_palette;
+Palette_t sunset_palette;
+Palette_t forest_palette;
 
 
 /* receive two colors in WRGB, create mix of ~(blend/255)*100 % c2, rest c1  */
@@ -61,9 +65,113 @@ void init_fire_palette(void) {
     fire_palette.name = "fire";
 }
 
+void init_neon_palette(void) {
+	WRGB_t entries[16] = {
+		{ .r = 255, .g =   0, .b = 150 },  //  0 - hot pink
+		{ .r = 255, .g =   0, .b =  50 },  //  1 - pink-red
+		{ .r = 255, .g =   0, .b =   0 },  //  2 - red
+		{ .r = 255, .g =  80, .b =   0 },  //  3 - orange
+		{ .r = 255, .g = 220, .b =   0 },  //  4 - yellow
+		{ .r = 255, .g = 100, .b =   0 },  //  5 - orange (back down)
+		{ .r = 255, .g =   0, .b =   0 },  //  6 - red
+		{ .r = 255, .g =   0, .b = 100 },  //  7 - hot pink
+		{ .r = 255, .g =   0, .b = 255 },  //  8 - magenta
+		{ .r = 150, .g =   0, .b = 255 },  //  9 - purple
+		{ .r =  50, .g =   0, .b = 255 },  // 10 - blue-violet
+		{ .r =   0, .g =  60, .b = 255 },  // 11 - electric blue
+		{ .r =   0, .g = 180, .b = 255 },  // 12 - cyan
+		{ .r =   0, .g =  60, .b = 255 },  // 13 - electric blue (back)
+		{ .r = 100, .g =   0, .b = 255 },  // 14 - purple
+		{ .r = 255, .g =   0, .b = 255 },  // 15 - magenta (wraps to 0)
+	};
+	for (int i = 0; i < 16; i++) {
+		neon_palette.entries[i] = entries[i];
+	}
+	neon_palette.name = "neon";
+}
+
+void init_ocean_palette(void) {
+	WRGB_t entries[16] = {
+		{ .r =   0, .g =   0, .b =  40 },  //  0 - deep navy
+		{ .r =   0, .g =   0, .b =  80 },  //  1 - dark blue
+		{ .r =   0, .g =  20, .b = 140 },  //  2 - royal blue
+		{ .r =   0, .g =  60, .b = 200 },  //  3 - blue
+		{ .r =   0, .g = 100, .b = 255 },  //  4 - bright blue
+		{ .r =   0, .g = 160, .b = 220 },  //  5 - blue-teal
+		{ .r =   0, .g = 200, .b = 180 },  //  6 - teal
+		{ .r =   0, .g = 220, .b = 140 },  //  7 - seafoam
+		{ .r =  80, .g = 240, .b = 180 },  //  8 - light seafoam
+		{ .r = 180, .g = 255, .b = 220 },  //  9 - foam white
+		{ .r =  80, .g = 240, .b = 180 },  // 10 - light seafoam
+		{ .r =   0, .g = 180, .b = 160 },  // 11 - teal
+		{ .r =   0, .g = 120, .b = 200 },  // 12 - blue
+		{ .r =   0, .g =  60, .b = 180 },  // 13 - mid blue
+		{ .r =   0, .g =  20, .b = 100 },  // 14 - dark blue
+		{ .r =   0, .g =   0, .b =  60 },  // 15 - deep navy (wraps to 0)
+	};
+	for (int i = 0; i < 16; i++) {
+		ocean_palette.entries[i] = entries[i];
+	}
+	ocean_palette.name = "ocean";
+}
+
+void init_sunset_palette(void) {
+	WRGB_t entries[16] = {
+		{ .r =  40, .g =   0, .b =  80 },  //  0 - deep purple
+		{ .r =  80, .g =   0, .b = 120 },  //  1 - purple
+		{ .r = 140, .g =   0, .b = 140 },  //  2 - magenta-purple
+		{ .r = 200, .g =   0, .b = 100 },  //  3 - magenta
+		{ .r = 240, .g =  20, .b =  60 },  //  4 - crimson
+		{ .r = 255, .g =  50, .b =  20 },  //  5 - red
+		{ .r = 255, .g = 100, .b =   0 },  //  6 - red-orange
+		{ .r = 255, .g = 150, .b =   0 },  //  7 - orange
+		{ .r = 255, .g = 200, .b =  20 },  //  8 - gold
+		{ .r = 255, .g = 230, .b =  80 },  //  9 - pale yellow
+		{ .r = 255, .g = 200, .b =  20 },  // 10 - gold
+		{ .r = 255, .g = 140, .b =   0 },  // 11 - orange
+		{ .r = 255, .g =  60, .b =  10 },  // 12 - red-orange
+		{ .r = 200, .g =  10, .b =  60 },  // 13 - crimson
+		{ .r = 120, .g =   0, .b = 120 },  // 14 - purple
+		{ .r =  60, .g =   0, .b = 100 },  // 15 - deep purple (wraps to 0)
+	};
+	for (int i = 0; i < 16; i++) {
+		sunset_palette.entries[i] = entries[i];
+	}
+	sunset_palette.name = "sunset";
+}
+
+void init_forest_palette(void) {
+	WRGB_t entries[16] = {
+		{ .r =  10, .g =  40, .b =   0 },  //  0 - dark green
+		{ .r =  20, .g =  80, .b =   0 },  //  1 - forest green
+		{ .r =   0, .g = 140, .b =  20 },  //  2 - green
+		{ .r =   0, .g = 200, .b =  40 },  //  3 - bright green
+		{ .r =  20, .g = 255, .b =  40 },  //  4 - emerald
+		{ .r =  80, .g = 220, .b =  20 },  //  5 - lime-green
+		{ .r = 140, .g = 200, .b =   0 },  //  6 - yellow-green
+		{ .r = 100, .g = 160, .b =  10 },  //  7 - olive
+		{ .r =  60, .g = 100, .b =  10 },  //  8 - dark olive
+		{ .r =  80, .g =  50, .b =  10 },  //  9 - brown
+		{ .r =  60, .g =  30, .b =   5 },  // 10 - dark brown
+		{ .r =  40, .g =  60, .b =   5 },  // 11 - brown-green
+		{ .r =  20, .g = 100, .b =  10 },  // 12 - dark green
+		{ .r =   0, .g = 160, .b =  30 },  // 13 - green
+		{ .r =  10, .g = 100, .b =  10 },  // 14 - mid green
+		{ .r =  10, .g =  60, .b =   0 },  // 15 - dark green (wraps to 0)
+	};
+	for (int i = 0; i < 16; i++) {
+		forest_palette.entries[i] = entries[i];
+	}
+	forest_palette.name = "forest";
+}
+
 void init_palettes(void) {
 	init_rainbow_palette();
 	init_fire_palette();
+	init_neon_palette();
+	init_ocean_palette();
+	init_sunset_palette();
+	init_forest_palette();
 }
 
 WRGB_t palette_color_at(const Palette_t *p, uint8_t index) {

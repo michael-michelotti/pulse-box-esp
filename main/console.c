@@ -35,13 +35,13 @@ static const char welcome_message[] =
 
 static const char help_text[] =
         "Command Menu:\r\n"
-        "  effect <rainbow|bass|twinkle|solid|splash|fire|breathe|wipe|spectrum|image|gif|tunnel>\r\n"
+        "  effect <rainbow|bass|...>\r\n"
         "  color <r> <g> <b>           - set primary color (0-255)\r\n"
         "  color <index> <r> <g> <b>   - set color by index (0-2)\r\n"
-        "  palette <rainbow|fire> - set palette\r\n"
-        "  speed <float>          - set speed (decimal 0-1)\r\n"
+        "  palette <rainbow|fire|...>   - set palette\r\n"
+        "  speed <float>          - set speed (0-1)\r\n"
         "  sensitivity <0-100>    - set audio sensitivity\r\n"
-        "  brightness <%>         - global brightness 0-100%\r\n"
+        "  brightness <0-100>       - global brightness 0-100%\r\n"
         "  direction <degrees>    - set direction (0-360)\r\n"
         "  wifi <ssid> <password>  - set WiFi credentials and reboot\r\n"
         "  status                 - show current settings\r\n"
@@ -103,6 +103,24 @@ bool process_user_command(const char *cmd_line, char *resp, size_t resp_size)
         }
         else if (strcmp(arg, "tunnel") == 0) {
             current_effect = &tunnel_effect;
+        }
+        else if (strcmp(arg, "tetris") == 0) {
+            current_effect = &tetris_effect;
+        }
+        else if (strcmp(arg, "plasma") == 0) {
+            current_effect = &plasma_effect;
+        }
+        else if (strcmp(arg, "sparkle") == 0) {
+            current_effect = &sparkle_effect;
+        }
+        else if (strcmp(arg, "glow") == 0) {
+            current_effect = &glow_effect;
+        }
+        else if (strcmp(arg, "matrix") == 0) {
+            current_effect = &matrix_effect;
+        }
+        else if (strcmp(arg, "heartbeat") == 0) {
+            current_effect = &heartbeat_effect;
         }
         else {
             snprintf(resp, resp_size, "unknown effect '%s'\r\n", arg);
@@ -229,6 +247,18 @@ bool process_user_command(const char *cmd_line, char *resp, size_t resp_size)
         }
         else if (strcmp(arg, "fire") == 0) {
             effect_params.palette = &fire_palette;
+        }
+        else if (strcmp(arg, "neon") == 0) {
+            effect_params.palette = &neon_palette;
+        }
+        else if (strcmp(arg, "ocean") == 0) {
+            effect_params.palette = &ocean_palette;
+        }
+        else if (strcmp(arg, "sunset") == 0) {
+            effect_params.palette = &sunset_palette;
+        }
+        else if (strcmp(arg, "forest") == 0) {
+            effect_params.palette = &forest_palette;
         }
         else {
             snprintf(resp, resp_size, "unknown palette '%s'\r\n", arg);

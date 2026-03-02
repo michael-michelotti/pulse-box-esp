@@ -30,6 +30,7 @@ typedef struct Mapping Mapping_t;
 
 typedef struct {
 	const char *name;
+	uint8_t skip_gamma;
 	void (*compute)(const Canvas_t *canvas, const FrameState_t *frame,
 			const EffectParams_t *params, const Mapping_t *mapping,
 			uint8_t *framebuffer);
@@ -47,5 +48,11 @@ extern const Effect_t spectrum_effect;
 extern const Effect_t image_effect;
 extern const Effect_t gif_effect;
 extern const Effect_t tunnel_effect;
+extern const Effect_t tetris_effect;
+extern const Effect_t plasma_effect;
+extern const Effect_t sparkle_effect;
+extern const Effect_t glow_effect;
+extern const Effect_t matrix_effect;
+extern const Effect_t heartbeat_effect;
 
 #endif /* INC_EFFECTS_H_ */

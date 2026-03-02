@@ -27,11 +27,13 @@ void renderer_render_frame(const Canvas_t *canvas, const FrameState_t *frame,
 	memcpy(preview_buf, framebuffer, canvas->num_pixels * 3);
 
 	/* Gamma correction (table guarantees non-zero in → non-zero out) */
-	for (int i = 0; i < canvas->num_pixels; i++) {
-		int idx = canvas->pixels[i].led_index * 3;
-		framebuffer[idx + 0] = gamma_correct(framebuffer[idx + 0]);
-		framebuffer[idx + 1] = gamma_correct(framebuffer[idx + 1]);
-		framebuffer[idx + 2] = gamma_correct(framebuffer[idx + 2]);
+	if (!effect->skip_gamma) {
+		for (int i = 0; i < canvas->num_pixels; i++) {
+			int idx = canvas->pixels[i].led_index * 3;
+			framebuffer[idx + 0] = gamma_correct(framebuffer[idx + 0]);
+			framebuffer[idx + 1] = gamma_correct(framebuffer[idx + 1]);
+			framebuffer[idx + 2] = gamma_correct(framebuffer[idx + 2]);
+		}
 	}
 
 	driver->send_frame(framebuffer, canvas->num_pixels);

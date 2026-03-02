@@ -13,13 +13,18 @@
 // multi-color pulse - waves/pulses from various origins based on frequency (red for high, blue for low)
 // advanced color effects - responds to harmony, frequency content deltas, creates advanced effects
 // rotating circle, concentric circles
-// tetris - randomly falling tetris pieces
-// multi-color twinkle
-// color bars (rainbow but not all colors in the spectrum) - width should control band width
+// multi-color twinkle - twinkle with palette or color set?
+// color loop - breathe effect that cycles through color set or palette
 // snake game simulation
 // draw mode - (processed by PC app, sent as raw data)
 // maybe add mic and do mic-mode for all audio modes?
-// acid/tie dye effect - concentric circles/waves radiating out, neon colors
+// acid/tie dye effect - concentric circles/waves radiating out, neon colors 
+	// (called distortion waves in wled? similar one called flow = retro colored bars permeating from inside out. waving cell is similar)
+// drift - rotating kaleidoscope
+// color bursts / black hole? complex effects might use their particle system
+// heartbeat
+// matrix - bars, white fading to green to black
+// polar lights - complex addition of sine wave (looks like an actual noise envelope - could make audio reactive?)
 // https://github.com/wled/WLED - open source firmware with a ton of effect ideas and implementations
 
 /************************/
@@ -220,6 +225,40 @@ static void twinkle_compute(const Canvas_t *canvas, const FrameState_t *frame,
 }
 
 
+/***** SPARKLE EFFECT - PALETTE-COLORED RANDOM SPARKS ********/
+#define SPARKLE_SPARKS_PER_FRAME	1
+
+static void sparkle_compute(const Canvas_t *canvas, const FrameState_t *frame,
+		const EffectParams_t *params, const Mapping_t *mapping,
+		uint8_t *framebuffer) {
+
+	float decay = 0.4f + params->speed * 3.2f;
+
+	static float brightness[MAX_PIXELS] = {0};
+	static uint8_t color_idx[MAX_PIXELS] = {0};
+
+	// Randomly spark pixels with a random palette color
+	for (int i = 0; i < SPARKLE_SPARKS_PER_FRAME; i++) {
+		int idx = rand() % canvas->num_pixels;
+		brightness[idx] = 1.0f;
+		color_idx[idx] = (uint8_t)(rand() & 0xFF);
+	}
+
+	// Decay and render
+	for (int i = 0; i < canvas->num_pixels; i++) {
+		brightness[i] -= decay * frame->dt;
+		if (brightness[i] < 0) brightness[i] = 0;
+
+		uint8_t bval = (uint8_t)(brightness[i] * 255.0f);
+		int led = canvas->pixels[i].led_index * 3;
+		WRGB_t color = palette_color_at(params->palette, color_idx[i]);
+		WRGB_t dimmed = dim_color(color, bval);
+		framebuffer[led + 0] = dimmed.r;
+		framebuffer[led + 1] = dimmed.g;
+		framebuffer[led + 2] = dimmed.b;
+	}
+}
+
 /***** SOLID EFFECT - LIGHTS UP SPARKS_PER_FRAME LEDS AT RANDOM ********/
 static void solid_compute(const Canvas_t *canvas, const FrameState_t *frame,
 		const EffectParams_t *params, const Mapping_t *mapping,
@@ -301,6 +340,66 @@ static void breathe_compute(const Canvas_t *canvas, const FrameState_t *frame,
         uint8_t *framebuffer) {
 
     float breath = (sinf(frame->time * params->speed * M_PI) + 1.0f) * 0.5f;
+
+    uint8_t bval = (uint8_t)(breath * 255.0f);
+    WRGB_t color = dim_color(params->color_set->colors[0], bval);
+
+    for (int i = 0; i < canvas->num_pixels; i++) {
+        int led = canvas->pixels[i].led_index * 3;
+        framebuffer[led + 0] = color.r;
+        framebuffer[led + 1] = color.g;
+        framebuffer[led + 2] = color.b;
+    }
+}
+
+/***** GLOW EFFECT - BREATHE THROUGH PALETTE COLORS ********/
+static void glow_compute(const Canvas_t *canvas, const FrameState_t *frame,
+        const EffectParams_t *params, const Mapping_t *mapping,
+        uint8_t *framebuffer) {
+
+    // Continuously advance palette position over time
+    float phase = frame->time * params->speed * 0.5f;
+    // Use sine to create smooth brightness oscillation
+    float breath = (sinf(phase * M_PI) + 1.0f) * 0.5f;
+    // Advance palette index — each full breath cycle (2*PI) moves ~16 palette steps
+    uint8_t index = (uint8_t)(phase * 8.0f);
+
+    WRGB_t color = palette_color_at(params->palette, index);
+    WRGB_t dimmed = dim_color(color, (uint8_t)(breath * 255.0f));
+
+    for (int i = 0; i < canvas->num_pixels; i++) {
+        int led = canvas->pixels[i].led_index * 3;
+        framebuffer[led + 0] = dimmed.r;
+        framebuffer[led + 1] = dimmed.g;
+        framebuffer[led + 2] = dimmed.b;
+    }
+}
+
+/***** HEARTBEAT EFFECT - DOUBLE-PULSE BRIGHTNESS PATTERN ********/
+static void heartbeat_compute(const Canvas_t *canvas, const FrameState_t *frame,
+        const EffectParams_t *params, const Mapping_t *mapping,
+        uint8_t *framebuffer) {
+
+    // Heartbeat cycle: two quick beats then a pause
+    // Phase 0.0-0.15: first beat (up and down)
+    // Phase 0.20-0.35: second beat (up and down)
+    // Phase 0.35-1.0: rest
+    float cycle = fmodf(frame->time * (0.15f + params->speed * 0.75f), 1.0f);
+    float breath;
+
+    if (cycle < 0.08f) {
+        breath = cycle / 0.08f;               // first beat rise
+    } else if (cycle < 0.16f) {
+        breath = 1.0f - (cycle - 0.08f) / 0.08f * 0.5f; // first beat fall to 0.5
+    } else if (cycle < 0.24f) {
+        float t = (cycle - 0.16f) / 0.08f;
+        breath = 0.5f + t * 0.3f;            // second beat rise (weaker, from 0.5 to 0.8)
+    } else if (cycle < 0.36f) {
+        float t = (cycle - 0.24f) / 0.12f;
+        breath = 0.8f * (1.0f - t) + 0.3f * t; // second beat fall to resting
+    } else {
+        breath = 0.3f;                        // resting brightness
+    }
 
     uint8_t bval = (uint8_t)(breath * 255.0f);
     WRGB_t color = dim_color(params->color_set->colors[0], bval);
@@ -445,6 +544,154 @@ static void image_compute(const Canvas_t *canvas, const FrameState_t *frame,
 	}
 }
 
+/***** TETRIS EFFECT - FALLING TETRIS PIECES THAT STACK UP ********/
+#define TETRIS_MAX_W 16
+#define TETRIS_MAX_H 16
+
+typedef enum { TETRIS_O, TETRIS_L, TETRIS_I } TetrisPieceType;
+
+typedef struct {
+	int x, y;               // position (bottom-left of bounding box)
+	TetrisPieceType type;
+	uint8_t color_idx;
+} TetrisPiece_t;
+
+// Piece definitions: each piece is a list of (dx, dy) offsets from (x, y)
+// O-piece (2x2 square):       (0,0) (1,0) (0,1) (1,1)
+// L-piece (horizontal, tail up): (0,0) (1,0) (2,0) (2,1)
+// I-piece (horizontal):        (0,0) (1,0) (2,0) (3,0)
+
+static const int piece_offsets[3][4][2] = {
+	[TETRIS_O] = { {0,0}, {1,0}, {0,1}, {1,1} },
+	[TETRIS_L] = { {0,0}, {1,0}, {2,0}, {2,1} },
+	[TETRIS_I] = { {0,0}, {1,0}, {2,0}, {3,0} },
+};
+static const int piece_sizes[3] = { 4, 4, 4 };
+static const int piece_widths[3] = { 2, 3, 4 };
+static const int piece_heights[3] = { 2, 2, 1 };
+
+static bool tetris_check_collision(const uint8_t *board, int w, int h,
+                                    TetrisPiece_t *piece, int dy) {
+	for (int i = 0; i < piece_sizes[piece->type]; i++) {
+		int px = piece->x + piece_offsets[piece->type][i][0];
+		int py = piece->y + piece_offsets[piece->type][i][1] + dy;
+		if (py < 0) return true;
+		if (px < 0 || px >= w || py >= h) return true;
+		if (board[py * w + px] != 0) return true;
+	}
+	return false;
+}
+
+static void tetris_place_piece(uint8_t *board, int w, TetrisPiece_t *piece) {
+	for (int i = 0; i < piece_sizes[piece->type]; i++) {
+		int px = piece->x + piece_offsets[piece->type][i][0];
+		int py = piece->y + piece_offsets[piece->type][i][1];
+		board[py * w + px] = piece->color_idx + 1; // 1-indexed color
+	}
+}
+
+static void tetris_spawn_piece(TetrisPiece_t *piece, int w, int h, int num_colors) {
+	piece->type = (TetrisPieceType)(rand() % 3);
+	piece->color_idx = rand() % (num_colors > 3 ? 3 : num_colors);
+	piece->x = rand() % (w - piece_widths[piece->type] + 1);
+	piece->y = h - piece_heights[piece->type];
+}
+
+static void tetris_compute(const Canvas_t *canvas, const FrameState_t *frame,
+        const EffectParams_t *params, const Mapping_t *mapping,
+        uint8_t *framebuffer) {
+
+	int w = canvas->max_x - canvas->min_x + 1;
+	int h = canvas->max_y - canvas->min_y + 1;
+	if (w > TETRIS_MAX_W) w = TETRIS_MAX_W;
+	if (h > TETRIS_MAX_H) h = TETRIS_MAX_H;
+
+	// Board stores color index+1 for each cell (0 = empty)
+	static uint8_t board[TETRIS_MAX_W * TETRIS_MAX_H];
+	static TetrisPiece_t current;
+	static float drop_accum = 0.0f;
+	static bool need_spawn = true;
+	static bool initialized = false;
+
+	int num_colors = params->color_set->num_colors;
+	if (num_colors < 1) num_colors = 1;
+
+	if (!initialized) {
+		for (int i = 0; i < TETRIS_MAX_W * TETRIS_MAX_H; i++) board[i] = 0;
+		need_spawn = true;
+		initialized = true;
+	}
+
+	// Spawn new piece if needed
+	if (need_spawn) {
+		tetris_spawn_piece(&current, w, h, num_colors);
+		// If spawn position collides, board is full — reset
+		if (tetris_check_collision(board, w, h, &current, 0)) {
+			for (int i = 0; i < TETRIS_MAX_W * TETRIS_MAX_H; i++) board[i] = 0;
+			tetris_spawn_piece(&current, w, h, num_colors);
+		}
+		need_spawn = false;
+		drop_accum = 0.0f;
+	}
+
+	// Drop speed: speed 0 = 1 row/sec, speed 1 = 10 rows/sec
+	float drop_rate = 1.0f + params->speed * 9.0f;
+	drop_accum += frame->dt * drop_rate;
+
+	while (drop_accum >= 1.0f) {
+		drop_accum -= 1.0f;
+		if (!tetris_check_collision(board, w, h, &current, -1)) {
+			current.y--;
+		} else {
+			// Land the piece
+			tetris_place_piece(board, w, &current);
+			need_spawn = true;
+			break;
+		}
+	}
+
+	// Render board
+	for (int i = 0; i < canvas->num_pixels; i++) {
+		int x = canvas->pixels[i].x - canvas->min_x;
+		int y = canvas->pixels[i].y - canvas->min_y;
+		int led = canvas->pixels[i].led_index * 3;
+
+		uint8_t cell = 0;
+		if (x >= 0 && x < w && y >= 0 && y < h)
+			cell = board[y * w + x];
+
+		if (cell > 0) {
+			WRGB_t c = params->color_set->colors[(cell - 1) % num_colors];
+			framebuffer[led + 0] = c.r;
+			framebuffer[led + 1] = c.g;
+			framebuffer[led + 2] = c.b;
+		} else {
+			framebuffer[led + 0] = 0;
+			framebuffer[led + 1] = 0;
+			framebuffer[led + 2] = 0;
+		}
+	}
+
+	// Render falling piece on top
+	if (!need_spawn) {
+		WRGB_t pc = params->color_set->colors[current.color_idx % num_colors];
+		for (int i = 0; i < piece_sizes[current.type]; i++) {
+			int px = current.x + piece_offsets[current.type][i][0] + canvas->min_x;
+			int py = current.y + piece_offsets[current.type][i][1] + canvas->min_y;
+			// Find the pixel at (px, py) and draw it
+			for (int j = 0; j < canvas->num_pixels; j++) {
+				if (canvas->pixels[j].x == px && canvas->pixels[j].y == py) {
+					int led = canvas->pixels[j].led_index * 3;
+					framebuffer[led + 0] = pc.r;
+					framebuffer[led + 1] = pc.g;
+					framebuffer[led + 2] = pc.b;
+					break;
+				}
+			}
+		}
+	}
+}
+
 /***** TUNNEL EFFECT - CONCENTRIC SQUARES RADIATING OUTWARD USING COLOR SET ********/
 static void tunnel_compute(const Canvas_t *canvas, const FrameState_t *frame,
         const EffectParams_t *params, const Mapping_t *mapping,
@@ -480,6 +727,124 @@ static void tunnel_compute(const Canvas_t *canvas, const FrameState_t *frame,
     }
 }
 
+/***** MATRIX EFFECT - RANDOMLY FALLING BLOCKS WITH BRIGHT HEAD AND FADING TRAIL ********/
+static void matrix_compute(const Canvas_t *canvas, const FrameState_t *frame,
+        const EffectParams_t *params, const Mapping_t *mapping,
+        uint8_t *framebuffer) {
+
+    int w = canvas->max_x - canvas->min_x + 1;
+    int h = canvas->max_y - canvas->min_y + 1;
+    if (w > 16) w = 16;
+    if (h > 16) h = 16;
+
+    static float drop_y[16];
+    static float spawn_timer[16];
+    static uint8_t trail[16 * 16];
+    static bool initialized = false;
+
+    if (!initialized) {
+        for (int x = 0; x < 16; x++) {
+            drop_y[x] = (float)h;
+            spawn_timer[x] = (float)(rand() % 100) / 100.0f * 2.0f;
+        }
+        for (int i = 0; i < 16 * 16; i++) trail[i] = 0;
+        initialized = true;
+    }
+
+    float fall_speed = 2.0f + params->speed * 12.0f;
+    float trail_decay = 300.0f + params->speed * 600.0f;
+
+    // Decay all trails
+    for (int i = 0; i < w * h; i++) {
+        int dec = (int)(trail_decay * frame->dt);
+        trail[i] = (trail[i] > dec) ? trail[i] - dec : 0;
+    }
+
+    // Update each column
+    for (int x = 0; x < w; x++) {
+        if (drop_y[x] >= h) {
+            spawn_timer[x] -= frame->dt;
+            if (spawn_timer[x] <= 0) {
+                drop_y[x] = (float)(h - 1);
+                spawn_timer[x] = 0.5f + (float)(rand() % 200) / 100.0f;
+            }
+        } else {
+            drop_y[x] -= fall_speed * frame->dt;
+            int iy = (int)(drop_y[x] + 0.5f);
+            if (iy >= 0 && iy < h) {
+                trail[iy * w + x] = 255;
+            }
+            if (drop_y[x] < -1.0f) {
+                drop_y[x] = (float)h;
+            }
+        }
+    }
+
+    // Render: white head → user color → black
+    WRGB_t white = { .r = 255, .g = 255, .b = 255 };
+    WRGB_t base = params->color_set->colors[0];
+    for (int i = 0; i < canvas->num_pixels; i++) {
+        int x = canvas->pixels[i].x - canvas->min_x;
+        int y = canvas->pixels[i].y - canvas->min_y;
+        int led = canvas->pixels[i].led_index * 3;
+
+        if (x >= 0 && x < w && y >= 0 && y < h) {
+            uint8_t val = trail[y * w + x];
+            if (val > 200) {
+                // Blend from base color toward white for the head
+                uint8_t head_blend = (uint8_t)((val - 200) * (255 / 55));
+                WRGB_t c = blend_colors(base, white, head_blend);
+                framebuffer[led + 0] = c.r;
+                framebuffer[led + 1] = c.g;
+                framebuffer[led + 2] = c.b;
+            } else {
+                WRGB_t c = dim_color(base, val);
+                framebuffer[led + 0] = c.r;
+                framebuffer[led + 1] = c.g;
+                framebuffer[led + 2] = c.b;
+            }
+        }
+    }
+}
+
+/***** PLASMA EFFECT - SINE WAVE INTERFERENCE PATTERN WITH PALETTE COLORING ********/
+static void plasma_compute(const Canvas_t *canvas, const FrameState_t *frame,
+        const EffectParams_t *params, const Mapping_t *mapping,
+        uint8_t *framebuffer) {
+
+    float t = frame->time * (0.3f + params->speed * 2.0f);
+
+    float w = (float)(canvas->max_x - canvas->min_x + 1);
+    float h = (float)(canvas->max_y - canvas->min_y + 1);
+    float cx = w * 0.5f;
+    float cy = h * 0.5f;
+
+    for (int i = 0; i < canvas->num_pixels; i++) {
+        float x = (float)canvas->pixels[i].x;
+        float y = (float)canvas->pixels[i].y;
+
+        // Layer 1: horizontal sine
+        float v = sinf(x * 0.8f + t * 1.3f);
+        // Layer 2: vertical sine
+        v += sinf(y * 0.9f + t * 0.9f);
+        // Layer 3: diagonal sine
+        v += sinf((x + y) * 0.6f + t * 0.7f);
+        // Layer 4: radial sine from center
+        float dx = x - cx + sinf(t * 0.4f) * 2.0f;
+        float dy = y - cy + cosf(t * 0.3f) * 2.0f;
+        v += sinf(sqrtf(dx * dx + dy * dy) * 1.0f - t * 1.1f);
+
+        // v is in range [-4, 4], map to [0, 255]
+        uint8_t index = (uint8_t)((v + 4.0f) * 31.875f); // 255/8 = 31.875
+
+        int led = canvas->pixels[i].led_index * 3;
+        WRGB_t rgb = palette_color_at(params->palette, index);
+        framebuffer[led + 0] = rgb.r;
+        framebuffer[led + 1] = rgb.g;
+        framebuffer[led + 2] = rgb.b;
+    }
+}
+
 /* Export of all available effects; must also be externed in effects.h, effects.h include gives access to all effects */
 const Effect_t bass_pulse_effect = { .name = "bass", .compute = bass_pulse_compute };
 const Effect_t rainbow_effect = { .name = "rainbow", .compute = rainbow_compute };
@@ -490,6 +855,12 @@ const Effect_t fire_effect = { .name = "fire", .compute = fire_compute };
 const Effect_t breathe_effect = { .name = "breathe", .compute = breathe_compute };
 const Effect_t wipe_effect = { .name = "wipe", .compute = wipe_compute };
 const Effect_t spectrum_effect = { .name = "spectrum", .compute = spectrum_compute };
-const Effect_t image_effect = { .name = "image", .compute = image_compute };
-const Effect_t gif_effect = { .name = "gif", .compute = image_compute };
+const Effect_t image_effect = { .name = "image", .skip_gamma = 1, .compute = image_compute };
+const Effect_t gif_effect = { .name = "gif", .skip_gamma = 1, .compute = image_compute };
 const Effect_t tunnel_effect = { .name = "tunnel", .compute = tunnel_compute };
+const Effect_t tetris_effect = { .name = "tetris", .compute = tetris_compute };
+const Effect_t plasma_effect = { .name = "plasma", .compute = plasma_compute };
+const Effect_t sparkle_effect = { .name = "sparkle", .compute = sparkle_compute };
+const Effect_t glow_effect = { .name = "glow", .compute = glow_compute };
+const Effect_t matrix_effect = { .name = "matrix", .compute = matrix_compute };
+const Effect_t heartbeat_effect = { .name = "heartbeat", .compute = heartbeat_compute };

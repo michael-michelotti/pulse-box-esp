@@ -54,9 +54,17 @@ WRGB_t palette_color_at(const Palette_t *p, uint8_t index);
 // WRGB_t set_color_at(const ColorSet_t* cs, uint8_t index);
 void init_rainbow_palette(void);
 void init_fire_palette(void);
+void init_neon_palette(void);
+void init_ocean_palette(void);
+void init_sunset_palette(void);
+void init_forest_palette(void);
 void init_palettes(void);
 
 extern Palette_t rainbow_palette;
 extern Palette_t fire_palette;
+extern Palette_t neon_palette;
+extern Palette_t ocean_palette;
+extern Palette_t sunset_palette;
+extern Palette_t forest_palette;
 
 #endif /* INC_LED_MATH_H_ */
