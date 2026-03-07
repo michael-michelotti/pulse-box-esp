@@ -5,13 +5,15 @@ idf_component_register(
         "console.c"
         "wifi_audio.c"
         "tcp_cmd_server.c"
-        "protocol.c"
+        "cmd_protocol.c"
+        "panel_bus.c"
     INCLUDE_DIRS
         "."
     REQUIRES
         pulse_engine
         esp_timer
         esp_driver_uart
+        esp_driver_gpio
         esp_wifi
         esp_netif
         nvs_flash

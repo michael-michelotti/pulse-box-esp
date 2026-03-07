@@ -1,5 +1,5 @@
-#ifndef PROTOCOL_H
-#define PROTOCOL_H
+#ifndef CMD_PROTOCOL_H
+#define CMD_PROTOCOL_H
 
 #include <stdint.h>
 #include <stddef.h>
@@ -28,7 +28,7 @@ typedef struct __attribute__((packed)) {
     uint16_t length;    /* little-endian, native on ESP32 + x86 */
 } FrameHeader_t;
 
-/* --- STATUS payload fixed portion (24 bytes) --- */
+/* --- STATUS payload fixed portion (25 bytes) --- */
 
 typedef struct __attribute__((packed)) {
     uint8_t  protocol_ver;
@@ -48,6 +48,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  grid_width;
     uint8_t  grid_height;
     uint16_t num_pixels;
+    uint8_t  sensitivity;   /* 0-100 */
 } StatusFixed_t;
 
 #define STATUS_FIXED_SIZE sizeof(StatusFixed_t)
@@ -72,4 +73,4 @@ int proto_send_frame(int sock, uint8_t type, const void *payload, uint16_t lengt
  */
 int proto_build_status(uint8_t *buf, size_t buf_size);
 
-#endif /* PROTOCOL_H */
+#endif /* CMD_PROTOCOL_H */

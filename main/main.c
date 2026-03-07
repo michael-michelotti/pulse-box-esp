@@ -19,6 +19,7 @@
 #include "console.h"
 #include "wifi_audio.h"
 #include "tcp_cmd_server.h"
+#include "panel_bus.h"
 
 static const char *TAG = "pulsebox";
 
@@ -237,9 +238,17 @@ static void render_task(void *pvParameters)
     int64_t last_frame_us = 0;
     int preview_counter = 0;
 
+    extern volatile bool canvas_updating;
+
     while (1) {
         int64_t now = esp_timer_get_time();
         if (now - last_frame_us >= 33333) { // ~30 FPS
+            if (canvas_updating) {
+                last_frame_us = now;
+                vTaskDelay(1);
+                continue;
+            }
+
             frame.time = now / 1000000.0f;
             frame.dt = frame.time - prev_time;
             prev_time = frame.time;
@@ -286,10 +295,11 @@ void app_main(void)
     effect_params.color_set = &default_color_set;
 
     // Initialize subsystems
-    canvas_init(&canvas);
+    canvas_init(&canvas);      /* default single-panel; panel_bus_task may rebuild */
     esp32_ws2812b_driver.init();
     renderer_init();
     console_init();
+    panel_bus_init();
 
     // Try loading WiFi credentials from NVS and connecting as STA
     char ssid[33] = {0};
@@ -323,6 +333,9 @@ void app_main(void)
 
     // Create TCP command server task on core 0 (works in both AP and STA mode)
     xTaskCreatePinnedToCore(tcp_cmd_server_task, "tcp_cmd", 4096, NULL, 3, NULL, 0);
+
+    // Create panel bus task on core 0 (discovery + hot-swap monitoring)
+    xTaskCreatePinnedToCore(panel_bus_task, "panel_bus", 4096, NULL, 4, NULL, 0);
 
     // app_main returns — FreeRTOS scheduler keeps running the created tasks
 }

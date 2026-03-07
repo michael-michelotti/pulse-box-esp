@@ -9,7 +9,7 @@
 
 #include "tcp_cmd_server.h"
 #include "console.h"
-#include "protocol.h"
+#include "cmd_protocol.h"
 #include "renderer.h"
 
 extern Canvas_t canvas;

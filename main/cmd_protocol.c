@@ -1,6 +1,6 @@
 #include <string.h>
 #include "lwip/sockets.h"
-#include "protocol.h"
+#include "cmd_protocol.h"
 #include "effects.h"
 #include "led_math.h"
 #include "canvas.h"
@@ -64,6 +64,7 @@ int proto_build_status(uint8_t *buf, size_t buf_size)
         .grid_width   = (uint8_t)(canvas.max_x - canvas.min_x + 1),
         .grid_height  = (uint8_t)(canvas.max_y - canvas.min_y + 1),
         .num_pixels   = canvas.num_pixels,
+        .sensitivity  = effect_params.sensitivity,
     };
 
     int offset = 0;

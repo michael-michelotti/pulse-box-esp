@@ -11,6 +11,7 @@
 #include "effects.h"
 #include "led_math.h"
 #include "tcp_cmd_server.h"
+#include "panel_bus.h"
 
 /* WiFi credential storage — defined in main.c */
 extern bool wifi_creds_save(const char *ssid, const char *password);
@@ -288,6 +289,26 @@ bool process_user_command(const char *cmd_line, char *resp, size_t resp_size)
             esp_restart();
         } else {
             snprintf(resp, resp_size, "failed to save WiFi credentials\r\n");
+        }
+    }
+
+    /*** PANEL TOPOLOGY ***/
+    else if (strcmp(cmd, "panels") == 0) {
+        const PbTopology_t *topo = panel_bus_get_topology();
+        if (topo->num_panels == 0) {
+            snprintf(resp, resp_size, "No panels discovered\r\n");
+        } else {
+            int off = snprintf(resp, resp_size,
+                    "Panels: %d, grid %dx%d, chain %d LEDs\r\n",
+                    topo->num_panels, topo->max_col + 1, topo->max_row + 1,
+                    topo->chain_len * 64);
+            for (int i = 0; i < topo->chain_len && (size_t)off < resp_size - 60; i++) {
+                const PbPanelInfo_t *p = &topo->panels[topo->chain_order[i]];
+                off += snprintf(resp + off, resp_size - off,
+                        "  [%d] addr=%u pos=(%d,%d) mux=%d->%d\r\n",
+                        i, p->addr, p->grid_x, p->grid_y,
+                        p->mux_in, p->mux_out);
+            }
         }
     }
 
