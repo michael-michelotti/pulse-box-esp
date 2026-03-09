@@ -34,6 +34,25 @@ static PbTopology_t topology;
 /* Flag to prevent render task from reading canvas mid-update */
 volatile bool canvas_updating = false;
 
+/* Sense GPIO ISR flags — set by ISR, consumed by panel_bus_task */
+static volatile bool sense_north_changed = false;
+static volatile bool sense_east_changed  = false;
+static volatile int64_t sense_north_change_time = 0;
+static volatile int64_t sense_east_change_time  = 0;
+
+static void IRAM_ATTR sense_isr_handler(void *arg)
+{
+    PbLink_t *link = (PbLink_t *)arg;
+    int64_t now = esp_timer_get_time();
+    if (link->side == PB_SIDE_NORTH) {
+        sense_north_changed = true;
+        sense_north_change_time = now;
+    } else {
+        sense_east_changed = true;
+        sense_east_change_time = now;
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /*  CRC-8 (polynomial 0x07, init 0x00)                               */
 /* ------------------------------------------------------------------ */
@@ -51,6 +70,17 @@ uint8_t pb_crc8(const uint8_t *data, size_t len)
         }
     }
     return crc;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                            */
+/* ------------------------------------------------------------------ */
+
+static const char *side_name(PbSide_t side)
+{
+    static const char *names[] = {"NORTH", "EAST", "SOUTH", "WEST"};
+    if (side < PB_SIDE_COUNT) return names[side];
+    return "NONE";
 }
 
 /* ------------------------------------------------------------------ */
@@ -74,28 +104,51 @@ static void init_uart_link(const PbLink_t *link, int tx_gpio, int rx_gpio)
 
     ESP_LOGI(TAG, "UART%d initialized (TX=%d, RX=%d) for %s link",
              link->uart_num, tx_gpio, rx_gpio,
-             link->side == PB_SIDE_NORTH ? "NORTH" : "EAST");
+             side_name(link->side));
 }
 
-static void init_sense_gpio(int gpio)
+static void init_sense_gpio(int gpio, PbLink_t *link)
 {
     gpio_config_t io_conf = {
         .pin_bit_mask = (1ULL << gpio),
         .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_ANYEDGE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&io_conf));
+    ESP_ERROR_CHECK(gpio_isr_handler_add(gpio, sense_isr_handler, link));
+}
+
+static void init_output_gpio(int gpio)
+{
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << gpio),
+        .mode         = GPIO_MODE_OUTPUT,
         .pull_up_en   = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type    = GPIO_INTR_DISABLE,
     };
     ESP_ERROR_CHECK(gpio_config(&io_conf));
+    gpio_set_level(gpio, 0);
 }
 
 void panel_bus_init(void)
 {
+    /* Install shared GPIO ISR service (must be called before gpio_isr_handler_add) */
+    esp_err_t err = gpio_install_isr_service(0);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_ERROR_CHECK(err);
+    }
+
     init_uart_link(&link_north, PB_NORTH_TX_GPIO, PB_NORTH_RX_GPIO);
     init_uart_link(&link_east, PB_EAST_TX_GPIO, PB_EAST_RX_GPIO);
 
-    init_sense_gpio(PB_NORTH_SENSE_GPIO);
-    init_sense_gpio(PB_EAST_SENSE_GPIO);
+    init_sense_gpio(PB_NORTH_SENSE_GPIO, &link_north);
+    init_sense_gpio(PB_EAST_SENSE_GPIO, &link_east);
+
+    init_output_gpio(PB_MUX_SELECT_GPIO);
+    init_output_gpio(PB_STATUS_LED_GPIO);
 
     memset(&topology, 0, sizeof(topology));
     topology.next_addr = 1;
@@ -219,7 +272,18 @@ int pb_recv_frame(const PbLink_t *link, PbFrameHeader_t *hdr,
 
 bool panel_bus_sense(const PbLink_t *link)
 {
-    return gpio_get_level(link->sense_gpio) != 0;
+    /* Sense pins are pulled high by default; neighbor grounds them */
+    return gpio_get_level(link->sense_gpio) == 0;
+}
+
+void panel_bus_set_controller_mux(PbSide_t out_side)
+{
+    /* IO10: 0 = route PWM out NORTH, 1 = route PWM out EAST
+     * TODO: verify polarity against actual hardware mux truth table */
+    int level = (out_side == PB_SIDE_EAST) ? 1 : 0;
+    gpio_set_level(PB_MUX_SELECT_GPIO, level);
+    ESP_LOGI(TAG, "Controller MUX set to %s (GPIO %d = %d)",
+             side_name(out_side), PB_MUX_SELECT_GPIO, level);
 }
 
 /* ------------------------------------------------------------------ */
@@ -234,7 +298,7 @@ static int discover_direct(PbLink_t *link, PbTopology_t *topo, int8_t grid_x, in
 {
     if (!panel_bus_sense(link)) {
         ESP_LOGI(TAG, "No neighbor on %s (sense low)",
-                 link->side == PB_SIDE_NORTH ? "NORTH" : "EAST");
+                 side_name(link->side));
         return 0;
     }
 
@@ -256,7 +320,7 @@ static int discover_direct(PbLink_t *link, PbTopology_t *topo, int8_t grid_x, in
                                  DISCOVER_TIMEOUT_MS);
     if (resp_len < 0 || resp_hdr.type != PB_MSG_DISCOVER_RESP || resp_len < 4) {
         ESP_LOGW(TAG, "No DISCOVER_RESP on %s",
-                 link->side == PB_SIDE_NORTH ? "NORTH" : "EAST");
+                 side_name(link->side));
         return 0;
     }
 
@@ -657,6 +721,13 @@ int panel_bus_configure_routing(PbTopology_t *topo)
                  panel->mux_in, panel->mux_out);
     }
 
+    /* Set the controller's own hardware MUX to route PWM to the first panel */
+    if (topo->chain_len > 0) {
+        PbPanelInfo_t *first = &topo->panels[topo->chain_order[0]];
+        PbSide_t out_side = (first->grid_y > 0) ? PB_SIDE_NORTH : PB_SIDE_EAST;
+        panel_bus_set_controller_mux(out_side);
+    }
+
     return 0;
 }
 
@@ -667,37 +738,55 @@ int panel_bus_configure_routing(PbTopology_t *topo)
 void panel_bus_rebuild_canvas(const PbTopology_t *topo)
 {
     if (topo->chain_len == 0) {
-        /* No panels discovered — use default single-panel canvas */
+        /* No remote panels discovered — use default single-panel canvas */
         canvas_init(&canvas);
         return;
     }
 
-    canvas.num_panels = topo->chain_len;
-    canvas.num_pixels = topo->chain_len * 64;
+    /* Controller is panel 0 in the chain at grid (0,0).
+     * Remote panels follow in snake order starting at chain position 1. */
+    int total_panels = 1 + topo->chain_len;  /* controller + remote panels */
 
-    /* Compute coordinate bounds */
+    canvas.num_panels = total_panels;
+    canvas.num_pixels = total_panels * 64;
+
+    /* Compute coordinate bounds (controller at 0,0 is always included) */
     canvas.min_x = 0;
     canvas.min_y = 0;
     canvas.max_x = (topo->max_col + 1) * 8 - 1;
     canvas.max_y = (topo->max_row + 1) * 8 - 1;
+    /* Ensure bounds cover at least the controller's 8x8 */
+    if (canvas.max_x < 7) canvas.max_x = 7;
+    if (canvas.max_y < 7) canvas.max_y = 7;
 
-    /* Build pixel mappings for each panel in chain order */
     int pixel_idx = 0;
+
+    /* Panel 0: controller's own 8x8 grid at (0,0), LED indices 0-63 */
+    for (int y = 0; y < 8; y++) {
+        for (int x = 0; x < 8; x++) {
+            int local_led = (y % 2 == 0) ? (y * 8 + x) : (y * 8 + (7 - x));
+            canvas.pixels[pixel_idx].x = x;
+            canvas.pixels[pixel_idx].y = y;
+            canvas.pixels[pixel_idx].led_index = local_led;
+            canvas.pixels[pixel_idx].panel_id = 0;
+            pixel_idx++;
+        }
+    }
+
+    /* Remote panels follow in chain order, starting at LED index 64 */
     for (int p = 0; p < topo->chain_len; p++) {
         const PbPanelInfo_t *panel = &topo->panels[topo->chain_order[p]];
         int base_x = panel->grid_x * 8;
         int base_y = panel->grid_y * 8;
-        int led_base = p * 64;
+        int led_base = (p + 1) * 64;   /* +1 because controller is chain pos 0 */
 
         for (int y = 0; y < 8; y++) {
             for (int x = 0; x < 8; x++) {
-                /* Zigzag within panel: even rows L->R, odd rows R->L */
                 int local_led = (y % 2 == 0) ? (y * 8 + x) : (y * 8 + (7 - x));
-
                 canvas.pixels[pixel_idx].x = base_x + x;
                 canvas.pixels[pixel_idx].y = base_y + y;
                 canvas.pixels[pixel_idx].led_index = led_base + local_led;
-                canvas.pixels[pixel_idx].panel_id = p;
+                canvas.pixels[pixel_idx].panel_id = p + 1;
                 pixel_idx++;
             }
         }
@@ -739,25 +828,52 @@ void panel_bus_task(void *pvParameters)
         ESP_LOGI(TAG, "No panels discovered, using single-panel mode");
     }
 
-    /* Main loop: listen for NEIGHBOR_CHANGE events on both links */
+    /* Main loop: monitor sense ISR flags and UART for topology changes */
     PbFrameHeader_t hdr;
     uint8_t payload[PB_MAX_PAYLOAD];
     bool topology_dirty = false;
     int64_t dirty_since = 0;
+    int status_led_counter = 0;
+    bool status_led_state = false;
 
     while (1) {
-        /* Poll NORTH link */
-        int len = pb_recv_frame(&link_north, &hdr, payload, sizeof(payload), 25);
-        if (len >= 0 && hdr.type == PB_MSG_NEIGHBOR_CHANGE) {
+        /* Toggle status LED roughly every 500ms (25 iterations * ~20ms) */
+        if (++status_led_counter >= 25) {
+            status_led_counter = 0;
+            status_led_state = !status_led_state;
+            gpio_set_level(PB_STATUS_LED_GPIO, status_led_state);
+        }
+
+        /* Check sense GPIO ISR flags (direct neighbor connect/disconnect) */
+        if (sense_north_changed) {
+            sense_north_changed = false;
+            bool present = gpio_get_level(PB_NORTH_SENSE_GPIO) == 0;
+            ESP_LOGI(TAG, "NORTH sense change: neighbor %s",
+                     present ? "connected" : "disconnected");
+            topology_dirty = true;
+            dirty_since = sense_north_change_time;
+        }
+        if (sense_east_changed) {
+            sense_east_changed = false;
+            bool present = gpio_get_level(PB_EAST_SENSE_GPIO) == 0;
+            ESP_LOGI(TAG, "EAST sense change: neighbor %s",
+                     present ? "connected" : "disconnected");
+            topology_dirty = true;
+            dirty_since = sense_east_change_time;
+        }
+
+        /* Poll NORTH link for NEIGHBOR_CHANGE from remote panels */
+        int len = pb_recv_frame(&link_north, &hdr, payload, sizeof(payload), 10);
+        if (len >= 2 && hdr.type == PB_MSG_NEIGHBOR_CHANGE) {
             ESP_LOGI(TAG, "NEIGHBOR_CHANGE from addr=%u: side=%u present=%u",
                      hdr.src, payload[0], payload[1]);
             topology_dirty = true;
             dirty_since = esp_timer_get_time();
         }
 
-        /* Poll EAST link */
-        len = pb_recv_frame(&link_east, &hdr, payload, sizeof(payload), 25);
-        if (len >= 0 && hdr.type == PB_MSG_NEIGHBOR_CHANGE) {
+        /* Poll EAST link for NEIGHBOR_CHANGE from remote panels */
+        len = pb_recv_frame(&link_east, &hdr, payload, sizeof(payload), 10);
+        if (len >= 2 && hdr.type == PB_MSG_NEIGHBOR_CHANGE) {
             ESP_LOGI(TAG, "NEIGHBOR_CHANGE from addr=%u: side=%u present=%u",
                      hdr.src, payload[0], payload[1]);
             topology_dirty = true;

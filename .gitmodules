@@ -1,3 +1,6 @@
 [submodule "tools/pulsebox-desktop"]
 	path = tools/pulsebox-desktop
 	url = git@github.com:michael-michelotti/pulsebox-desktop.git
+[submodule "tools/pulsebox-panel"]
+	path = tools/pulsebox-panel
+	url = git@github.com:michael-michelotti/pulse-box-panel.git

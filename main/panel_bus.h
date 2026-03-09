@@ -6,19 +6,22 @@
 #include <stddef.h>
 
 /* ------------------------------------------------------------------ */
-/*  UART / GPIO configuration (controller side)                       */
+/*  UART / GPIO configuration (controller v2 board)                   */
 /*  Controller sits at bottom-left corner: NORTH and EAST links       */
 /* ------------------------------------------------------------------ */
 
 #define PB_NORTH_UART_NUM       1
-#define PB_NORTH_TX_GPIO        4
-#define PB_NORTH_RX_GPIO        5
-#define PB_NORTH_SENSE_GPIO     6
+#define PB_NORTH_TX_GPIO        39
+#define PB_NORTH_RX_GPIO        40
+#define PB_NORTH_SENSE_GPIO     14
 
 #define PB_EAST_UART_NUM        2
-#define PB_EAST_TX_GPIO         7
-#define PB_EAST_RX_GPIO         15
-#define PB_EAST_SENSE_GPIO      16
+#define PB_EAST_TX_GPIO         47
+#define PB_EAST_RX_GPIO         48
+#define PB_EAST_SENSE_GPIO      42
+
+#define PB_MUX_SELECT_GPIO      10
+#define PB_STATUS_LED_GPIO      41
 
 #define PB_BAUD_RATE            115200
 #define PB_UART_RX_BUF_SIZE     256
@@ -192,6 +195,9 @@ void panel_bus_rebuild_canvas(const PbTopology_t *topo);
 
 /* Check if a side has a neighbor connected (reads sense GPIO) */
 bool panel_bus_sense(const PbLink_t *link);
+
+/* Set the controller's hardware MUX to route WS2812B signal out a side */
+void panel_bus_set_controller_mux(PbSide_t out_side);
 
 /* Get the global topology (read-only access for console/status) */
 const PbTopology_t *panel_bus_get_topology(void);

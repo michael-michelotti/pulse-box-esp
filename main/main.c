@@ -335,7 +335,7 @@ void app_main(void)
     xTaskCreatePinnedToCore(tcp_cmd_server_task, "tcp_cmd", 4096, NULL, 3, NULL, 0);
 
     // Create panel bus task on core 0 (discovery + hot-swap monitoring)
-    xTaskCreatePinnedToCore(panel_bus_task, "panel_bus", 4096, NULL, 4, NULL, 0);
+    xTaskCreatePinnedToCore(panel_bus_task, "panel_bus", 8192, NULL, 4, NULL, 0);
 
     // app_main returns — FreeRTOS scheduler keeps running the created tasks
 }
