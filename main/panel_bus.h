@@ -28,9 +28,19 @@
 
 /* ------------------------------------------------------------------ */
 /*  Addresses                                                         */
+/*                                                                    */
+/*  XY dimension-order routing: addresses encode grid coordinates.     */
+/*  High nibble = x (column), low nibble = y (row).                   */
+/*  Controller at (0,0) = 0x00. Panel at (2,3) = 0x23.               */
+/*  Panels route by comparing dst coords to own coords:               */
+/*    route X-axis first (EAST/WEST), then Y-axis (NORTH/SOUTH).      */
 /* ------------------------------------------------------------------ */
 
-#define PB_ADDR_CONTROLLER      0x00
+#define PB_ADDR_XY(x, y)       (((uint8_t)(x) << 4) | ((uint8_t)(y) & 0x0F))
+#define PB_ADDR_X(addr)        (((uint8_t)(addr) >> 4) & 0x0F)
+#define PB_ADDR_Y(addr)        ((uint8_t)(addr) & 0x0F)
+
+#define PB_ADDR_CONTROLLER      0x00    /* (0,0) */
 #define PB_ADDR_UNASSIGNED      0xFE
 #define PB_ADDR_BROADCAST       0xFF
 
@@ -91,22 +101,22 @@ typedef struct __attribute__((packed)) {
 
 /* --- Discovery --- */
 #define PB_MSG_DISCOVER             0x01    /* C->P  [side: u8] */
-#define PB_MSG_ASSIGN_ADDR          0x02    /* C->P  [hw_id: 4B] [addr: u8] */
+#define PB_MSG_ASSIGN_ADDR          0x02    /* C->P  [hw_id: 4B] [addr: u8] (addr is XY-encoded) */
 #define PB_MSG_QUERY_NEIGHBORS      0x03    /* C->P  (empty) */
-#define PB_MSG_DISCOVER_SIDE        0x04    /* C->P  [side: u8] — tell panel to send DISCOVER out a side */
+#define PB_MSG_DISCOVER_SIDE        0x04    /* C->P  [side: u8] [new_addr: u8] — proxy discovery */
 
 /* --- Mux control --- */
 #define PB_MSG_SET_MUX              0x10    /* C->P  [pwm_in: u8] [pwm_out: u8] */
 
 /* --- General control --- */
 #define PB_MSG_RESET                0x20    /* C->P  (empty) — revert to unassigned */
-#define PB_MSG_FORWARD              0x21    /* C->P  [out_side: u8] [enclosed_frame: ...] */
 
 /* --- Panel -> Controller responses --- */
 #define PB_MSG_DISCOVER_RESP        0x81    /* P->C  [hw_id: 4B] */
 #define PB_MSG_ASSIGN_RESP          0x82    /* P->C  [addr: u8] */
 #define PB_MSG_NEIGHBORS_RESP       0x83    /* P->C  [presence: u8 bitmask] */
 #define PB_MSG_SET_MUX_RESP         0x84    /* P->C  [status: u8] */
+#define PB_MSG_DISCOVER_SIDE_RESP   0x85    /* P->C  [hw_id: 4B] [neighbors: u8] */
 #define PB_MSG_NEIGHBOR_CHANGE      0x86    /* P->C  [side: u8] [present: u8] (unsolicited) */
 
 /* --- Either direction --- */
@@ -128,7 +138,7 @@ typedef struct {
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    uint8_t     addr;           /* assigned address (0x01+) */
+    uint8_t     addr;           /* XY-encoded address: (x << 4) | y */
     uint8_t     hw_id[4];       /* STM32 UID (truncated to 4 bytes) */
     int8_t      grid_x;         /* column in grid (0 = controller column) */
     int8_t      grid_y;         /* row in grid (0 = controller row) */
@@ -136,7 +146,6 @@ typedef struct {
     uint8_t     mux_in;         /* configured PWM input side */
     uint8_t     mux_out;        /* configured PWM output side */
     PbSide_t    parent_side;    /* side toward controller in spanning tree */
-    PbLink_t   *link;           /* controller link this panel is reachable through */
     bool        online;
 } PbPanelInfo_t;
 
@@ -147,7 +156,6 @@ typedef struct {
 typedef struct {
     PbPanelInfo_t   panels[PB_MAX_PANELS];
     uint8_t         num_panels;
-    uint8_t         next_addr;      /* next address to assign (starts at 1) */
 
     /* Snake path order for WS2812B daisy chain */
     uint8_t         chain_order[PB_MAX_PANELS]; /* indices into panels[] */

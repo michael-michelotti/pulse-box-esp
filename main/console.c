@@ -305,7 +305,7 @@ bool process_user_command(const char *cmd_line, char *resp, size_t resp_size)
             for (int i = 0; i < topo->chain_len && (size_t)off < resp_size - 60; i++) {
                 const PbPanelInfo_t *p = &topo->panels[topo->chain_order[i]];
                 off += snprintf(resp + off, resp_size - off,
-                        "  [%d] addr=%u pos=(%d,%d) mux=%d->%d\r\n",
+                        "  [%d] addr=0x%02x pos=(%d,%d) mux=%d->%d\r\n",
                         i, p->addr, p->grid_x, p->grid_y,
                         p->mux_in, p->mux_out);
             }

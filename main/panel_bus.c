@@ -151,7 +151,6 @@ void panel_bus_init(void)
     init_output_gpio(PB_STATUS_LED_GPIO);
 
     memset(&topology, 0, sizeof(topology));
-    topology.next_addr = 1;
 
     ESP_LOGI(TAG, "Panel bus initialized");
 }
@@ -287,6 +286,35 @@ void panel_bus_set_controller_mux(PbSide_t out_side)
 }
 
 /* ------------------------------------------------------------------ */
+/*  XY routing helpers (controller side)                              */
+/* ------------------------------------------------------------------ */
+
+/* Determine which controller UART link to use for a given destination.
+ * Applies XY dimension-order routing from (0,0): route X first, then Y. */
+static PbLink_t *controller_link_for(uint8_t dst_addr)
+{
+    uint8_t x = PB_ADDR_X(dst_addr);
+    if (x > 0) return &link_east;   /* need to go east first */
+    return &link_north;             /* x==0, go north */
+}
+
+/* Send a frame routed via XY from the controller */
+static int pb_send_routed(uint8_t dst, uint8_t type,
+                          const uint8_t *payload, uint8_t len)
+{
+    PbLink_t *link = controller_link_for(dst);
+    return pb_send_frame(link, dst, PB_ADDR_CONTROLLER, type, payload, len);
+}
+
+/* Receive a frame on the link used to reach dst */
+static int pb_recv_routed(uint8_t dst, PbFrameHeader_t *hdr,
+                          uint8_t *payload, uint8_t max_len, int timeout_ms)
+{
+    PbLink_t *link = controller_link_for(dst);
+    return pb_recv_frame(link, hdr, payload, max_len, timeout_ms);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Discovery helpers                                                 */
 /* ------------------------------------------------------------------ */
 
@@ -296,8 +324,13 @@ void panel_bus_set_controller_mux(PbSide_t out_side)
 /* Send DISCOVER directly out a link (for controller's immediate neighbors) */
 static int discover_direct(PbLink_t *link, PbTopology_t *topo, int8_t grid_x, int8_t grid_y)
 {
+    if (topo->num_panels >= PB_MAX_PANELS) {
+        ESP_LOGW(TAG, "Max panels reached, skipping discovery");
+        return 0;
+    }
+
     if (!panel_bus_sense(link)) {
-        ESP_LOGI(TAG, "No neighbor on %s (sense low)",
+        ESP_LOGI(TAG, "No neighbor on %s (sense high)",
                  side_name(link->side));
         return 0;
     }
@@ -332,10 +365,11 @@ static int discover_direct(PbLink_t *link, PbTopology_t *topo, int8_t grid_x, in
         }
     }
 
-    /* Assign address */
+    /* Assign XY-encoded address */
+    uint8_t new_addr = PB_ADDR_XY(grid_x, grid_y);
     uint8_t assign_payload[5];
     memcpy(assign_payload, resp_payload, 4);        /* hw_id */
-    assign_payload[4] = topo->next_addr;            /* new address */
+    assign_payload[4] = new_addr;
 
     if (pb_send_frame(link, PB_ADDR_UNASSIGNED, PB_ADDR_CONTROLLER,
                       PB_MSG_ASSIGN_ADDR, assign_payload, 5) != 0) {
@@ -351,18 +385,12 @@ static int discover_direct(PbLink_t *link, PbTopology_t *topo, int8_t grid_x, in
     }
 
     /* Record panel info */
-    if (topo->num_panels >= PB_MAX_PANELS) {
-        ESP_LOGW(TAG, "Max panels reached");
-        return 0;
-    }
-
     PbPanelInfo_t *panel = &topo->panels[topo->num_panels];
-    panel->addr = topo->next_addr++;
+    panel->addr = new_addr;
     memcpy(panel->hw_id, assign_payload, 4);
     panel->grid_x = grid_x;
     panel->grid_y = grid_y;
     panel->parent_side = PB_OPPOSITE_SIDE(link->side);
-    panel->link = link;
     panel->online = true;
     panel->mux_in = PB_SIDE_NONE;
     panel->mux_out = PB_SIDE_NONE;
@@ -379,7 +407,7 @@ static int discover_direct(PbLink_t *link, PbTopology_t *topo, int8_t grid_x, in
 
     topo->num_panels++;
 
-    ESP_LOGI(TAG, "Discovered panel addr=%u at (%d,%d) hw_id=%02x%02x%02x%02x neighbors=0x%02x",
+    ESP_LOGI(TAG, "Discovered panel addr=0x%02x at (%d,%d) hw_id=%02x%02x%02x%02x neighbors=0x%02x",
              panel->addr, panel->grid_x, panel->grid_y,
              panel->hw_id[0], panel->hw_id[1], panel->hw_id[2], panel->hw_id[3],
              panel->neighbors);
@@ -387,110 +415,63 @@ static int discover_direct(PbLink_t *link, PbTopology_t *topo, int8_t grid_x, in
     return 1;
 }
 
-/* Send a FORWARD-wrapped message to a panel via its link.
- * The FORWARD payload is: [out_side: u8] [enclosed_frame: ...] */
-static int send_forwarded(PbLink_t *link, uint8_t relay_addr,
-                          PbSide_t out_side, uint8_t dst, uint8_t src,
-                          uint8_t type, const uint8_t *payload, uint8_t len)
+/* Discover a panel via DISCOVER_SIDE proxy through an already-addressed relay.
+ * The relay panel handles the full discover+assign+query sequence locally
+ * and returns a DISCOVER_SIDE_RESP with the result. */
+static int discover_via_side(uint8_t relay_addr, PbSide_t out_side,
+                             PbTopology_t *topo, int8_t grid_x, int8_t grid_y)
 {
-    /* Build the enclosed frame */
-    uint8_t enclosed[PB_MAX_FRAME_SIZE];
-    enclosed[0] = PB_SYNC_BYTE;
-    enclosed[1] = dst;
-    enclosed[2] = src;
-    enclosed[3] = type;
-    enclosed[4] = len;
-    if (len > 0 && payload != NULL) {
-        memcpy(&enclosed[5], payload, len);
+    if (topo->num_panels >= PB_MAX_PANELS) {
+        ESP_LOGW(TAG, "Max panels reached, skipping discovery");
+        return 0;
     }
-    enclosed[5 + len] = pb_crc8(&enclosed[1], 4 + len);
-    uint8_t enclosed_len = PB_HEADER_SIZE + len + 1;
 
-    /* Build FORWARD payload: [out_side] [enclosed_frame] */
-    uint8_t fwd_payload[1 + PB_MAX_FRAME_SIZE];
-    fwd_payload[0] = (uint8_t)out_side;
-    memcpy(&fwd_payload[1], enclosed, enclosed_len);
+    uint8_t new_addr = PB_ADDR_XY(grid_x, grid_y);
 
-    return pb_send_frame(link, relay_addr, PB_ADDR_CONTROLLER,
-                         PB_MSG_FORWARD, fwd_payload, 1 + enclosed_len);
-}
+    /* DISCOVER_SIDE payload: [side: u8] [new_addr: u8] */
+    uint8_t ds_payload[2] = { (uint8_t)out_side, new_addr };
 
-/* Discover a panel via forwarding through an already-addressed relay panel */
-static int discover_forwarded(PbLink_t *link, uint8_t relay_addr,
-                              PbSide_t out_side, PbTopology_t *topo,
-                              int8_t grid_x, int8_t grid_y)
-{
+    PbLink_t *link = controller_link_for(relay_addr);
     uart_flush_input(link->uart_num);
 
-    /* Send DISCOVER via FORWARD */
-    uint8_t side_payload = PB_OPPOSITE_SIDE(out_side);
-    if (send_forwarded(link, relay_addr, out_side,
-                       PB_ADDR_UNASSIGNED, PB_ADDR_CONTROLLER,
-                       PB_MSG_DISCOVER, &side_payload, 1) != 0) {
+    if (pb_send_frame(link, relay_addr, PB_ADDR_CONTROLLER,
+                      PB_MSG_DISCOVER_SIDE, ds_payload, 2) != 0) {
         return -1;
     }
 
-    /* Wait for forwarded DISCOVER_RESP */
+    /* Wait for DISCOVER_SIDE_RESP: [hw_id: 4B] [neighbors: u8] */
     PbFrameHeader_t resp_hdr;
     uint8_t resp_payload[PB_MAX_PAYLOAD];
-    int resp_len = pb_recv_frame(link, &resp_hdr, resp_payload, sizeof(resp_payload),
-                                 DISCOVER_TIMEOUT_MS * 2);
-    if (resp_len < 0 || resp_hdr.type != PB_MSG_DISCOVER_RESP || resp_len < 4) {
-        return 0; /* no panel there */
+    int resp_len = pb_recv_routed(relay_addr, &resp_hdr, resp_payload,
+                                  sizeof(resp_payload), DISCOVER_TIMEOUT_MS * 4);
+    if (resp_len < 5 || resp_hdr.type != PB_MSG_DISCOVER_SIDE_RESP) {
+        return 0;   /* no panel found or proxy failed */
     }
 
-    /* Check for duplicate */
+    /* Check for duplicate hw_id */
     for (int i = 0; i < topo->num_panels; i++) {
         if (memcmp(topo->panels[i].hw_id, resp_payload, 4) == 0) {
+            ESP_LOGI(TAG, "Panel already discovered (hw_id match), skipping");
             return 0;
         }
     }
 
-    /* Assign address via FORWARD */
-    uint8_t assign_payload[5];
-    memcpy(assign_payload, resp_payload, 4);
-    assign_payload[4] = topo->next_addr;
-
-    if (send_forwarded(link, relay_addr, out_side,
-                       PB_ADDR_UNASSIGNED, PB_ADDR_CONTROLLER,
-                       PB_MSG_ASSIGN_ADDR, assign_payload, 5) != 0) {
-        return -1;
-    }
-
-    resp_len = pb_recv_frame(link, &resp_hdr, resp_payload, sizeof(resp_payload),
-                             ASSIGN_TIMEOUT_MS * 2);
-    if (resp_len < 0 || resp_hdr.type != PB_MSG_ASSIGN_RESP) {
-        return -1;
-    }
-
-    if (topo->num_panels >= PB_MAX_PANELS) return 0;
-
+    /* Record panel info */
     PbPanelInfo_t *panel = &topo->panels[topo->num_panels];
-    panel->addr = topo->next_addr++;
-    memcpy(panel->hw_id, assign_payload, 4);
+    panel->addr = new_addr;
+    memcpy(panel->hw_id, resp_payload, 4);
     panel->grid_x = grid_x;
     panel->grid_y = grid_y;
+    panel->neighbors = resp_payload[4];
     panel->parent_side = PB_OPPOSITE_SIDE(out_side);
-    panel->link = link;
     panel->online = true;
     panel->mux_in = PB_SIDE_NONE;
     panel->mux_out = PB_SIDE_NONE;
 
-    /* Query neighbors via the relay chain — for simplicity, send directly
-     * to the new panel's address (intermediate panels forward by address) */
-    if (pb_send_frame(link, panel->addr, PB_ADDR_CONTROLLER,
-                      PB_MSG_QUERY_NEIGHBORS, NULL, 0) == 0) {
-        resp_len = pb_recv_frame(link, &resp_hdr, resp_payload, sizeof(resp_payload),
-                                 DISCOVER_TIMEOUT_MS * 2);
-        if (resp_len >= 1 && resp_hdr.type == PB_MSG_NEIGHBORS_RESP) {
-            panel->neighbors = resp_payload[0];
-        }
-    }
-
     topo->num_panels++;
 
-    ESP_LOGI(TAG, "Discovered panel addr=%u at (%d,%d) via relay addr=%u neighbors=0x%02x",
-             panel->addr, panel->grid_x, panel->grid_y, relay_addr, panel->neighbors);
+    ESP_LOGI(TAG, "Discovered panel addr=0x%02x at (%d,%d) via relay 0x%02x neighbors=0x%02x",
+             new_addr, grid_x, grid_y, relay_addr, panel->neighbors);
 
     return 1;
 }
@@ -501,8 +482,8 @@ static int discover_forwarded(PbLink_t *link, uint8_t relay_addr,
 
 /* BFS queue entry */
 typedef struct {
-    uint8_t     panel_idx;      /* index into topo->panels[] */
-    PbSide_t    side;           /* side to explore */
+    uint8_t     relay_addr;     /* XY-encoded address of relay panel */
+    PbSide_t    side;           /* side the relay should discover */
     int8_t      grid_x;        /* expected grid position of undiscovered panel */
     int8_t      grid_y;
 } BfsEntry_t;
@@ -524,7 +505,6 @@ static bool grid_occupied(const PbTopology_t *topo, int8_t x, int8_t y)
 int panel_bus_discover(PbTopology_t *topo)
 {
     memset(topo, 0, sizeof(*topo));
-    topo->next_addr = 1;
 
     BfsEntry_t queue[PB_MAX_PANELS * 4];
     int queue_head = 0, queue_tail = 0;
@@ -536,15 +516,14 @@ int panel_bus_discover(PbTopology_t *topo)
     found = discover_direct(&link_north, topo, 0, 1);
     if (found > 0) {
         PbPanelInfo_t *p = &topo->panels[topo->num_panels - 1];
-        /* Enqueue unexplored sides of this panel */
         for (int s = 0; s < PB_SIDE_COUNT; s++) {
-            if (s == (int)p->parent_side) continue;     /* skip side toward controller */
-            if (!(p->neighbors & (1 << s))) continue;   /* skip sides with no neighbor */
+            if (s == (int)p->parent_side) continue;
+            if (!(p->neighbors & (1 << s))) continue;
             int8_t nx = p->grid_x + side_dx[s];
             int8_t ny = p->grid_y + side_dy[s];
             if (!grid_occupied(topo, nx, ny)) {
                 queue[queue_tail++] = (BfsEntry_t){
-                    .panel_idx = (uint8_t)(topo->num_panels - 1),
+                    .relay_addr = p->addr,
                     .side = (PbSide_t)s,
                     .grid_x = nx, .grid_y = ny,
                 };
@@ -563,7 +542,7 @@ int panel_bus_discover(PbTopology_t *topo)
             int8_t ny = p->grid_y + side_dy[s];
             if (!grid_occupied(topo, nx, ny)) {
                 queue[queue_tail++] = (BfsEntry_t){
-                    .panel_idx = (uint8_t)(topo->num_panels - 1),
+                    .relay_addr = p->addr,
                     .side = (PbSide_t)s,
                     .grid_x = nx, .grid_y = ny,
                 };
@@ -571,15 +550,14 @@ int panel_bus_discover(PbTopology_t *topo)
         }
     }
 
-    /* Step 2: BFS through forwarded discovery */
+    /* Step 2: BFS through DISCOVER_SIDE proxy */
     while (queue_head < queue_tail) {
         BfsEntry_t entry = queue[queue_head++];
 
         if (grid_occupied(topo, entry.grid_x, entry.grid_y)) continue;
 
-        PbPanelInfo_t *relay = &topo->panels[entry.panel_idx];
-        found = discover_forwarded(relay->link, relay->addr, entry.side,
-                                   topo, entry.grid_x, entry.grid_y);
+        found = discover_via_side(entry.relay_addr, entry.side,
+                                  topo, entry.grid_x, entry.grid_y);
         if (found > 0) {
             PbPanelInfo_t *p = &topo->panels[topo->num_panels - 1];
             for (int s = 0; s < PB_SIDE_COUNT; s++) {
@@ -589,7 +567,7 @@ int panel_bus_discover(PbTopology_t *topo)
                 int8_t ny = p->grid_y + side_dy[s];
                 if (!grid_occupied(topo, nx, ny)) {
                     queue[queue_tail++] = (BfsEntry_t){
-                        .panel_idx = (uint8_t)(topo->num_panels - 1),
+                        .relay_addr = p->addr,
                         .side = (PbSide_t)s,
                         .grid_x = nx, .grid_y = ny,
                     };
@@ -696,27 +674,26 @@ int panel_bus_configure_routing(PbTopology_t *topo)
         }
     }
 
-    /* Send SET_MUX to each panel */
+    /* Send SET_MUX to each panel via XY routing */
     for (int i = 0; i < topo->chain_len; i++) {
         PbPanelInfo_t *panel = &topo->panels[topo->chain_order[i]];
         uint8_t mux_payload[2] = { panel->mux_in, panel->mux_out };
 
-        if (pb_send_frame(panel->link, panel->addr, PB_ADDR_CONTROLLER,
-                          PB_MSG_SET_MUX, mux_payload, 2) != 0) {
-            ESP_LOGE(TAG, "Failed to send SET_MUX to addr=%u", panel->addr);
+        if (pb_send_routed(panel->addr, PB_MSG_SET_MUX, mux_payload, 2) != 0) {
+            ESP_LOGE(TAG, "Failed to send SET_MUX to addr=0x%02x", panel->addr);
             return -1;
         }
 
         /* Wait for ack */
         PbFrameHeader_t resp_hdr;
         uint8_t resp_payload[8];
-        int resp_len = pb_recv_frame(panel->link, &resp_hdr, resp_payload,
-                                     sizeof(resp_payload), ASSIGN_TIMEOUT_MS);
+        int resp_len = pb_recv_routed(panel->addr, &resp_hdr, resp_payload,
+                                      sizeof(resp_payload), ASSIGN_TIMEOUT_MS);
         if (resp_len < 0 || resp_hdr.type != PB_MSG_SET_MUX_RESP) {
-            ESP_LOGW(TAG, "No SET_MUX_RESP from addr=%u", panel->addr);
+            ESP_LOGW(TAG, "No SET_MUX_RESP from addr=0x%02x", panel->addr);
         }
 
-        ESP_LOGI(TAG, "Panel addr=%u (%d,%d): mux_in=%d mux_out=%d",
+        ESP_LOGI(TAG, "Panel addr=0x%02x (%d,%d): mux_in=%d mux_out=%d",
                  panel->addr, panel->grid_x, panel->grid_y,
                  panel->mux_in, panel->mux_out);
     }
@@ -865,7 +842,7 @@ void panel_bus_task(void *pvParameters)
         /* Poll NORTH link for NEIGHBOR_CHANGE from remote panels */
         int len = pb_recv_frame(&link_north, &hdr, payload, sizeof(payload), 10);
         if (len >= 2 && hdr.type == PB_MSG_NEIGHBOR_CHANGE) {
-            ESP_LOGI(TAG, "NEIGHBOR_CHANGE from addr=%u: side=%u present=%u",
+            ESP_LOGI(TAG, "NEIGHBOR_CHANGE from addr=0x%02x: side=%u present=%u",
                      hdr.src, payload[0], payload[1]);
             topology_dirty = true;
             dirty_since = esp_timer_get_time();
@@ -874,7 +851,7 @@ void panel_bus_task(void *pvParameters)
         /* Poll EAST link for NEIGHBOR_CHANGE from remote panels */
         len = pb_recv_frame(&link_east, &hdr, payload, sizeof(payload), 10);
         if (len >= 2 && hdr.type == PB_MSG_NEIGHBOR_CHANGE) {
-            ESP_LOGI(TAG, "NEIGHBOR_CHANGE from addr=%u: side=%u present=%u",
+            ESP_LOGI(TAG, "NEIGHBOR_CHANGE from addr=0x%02x: side=%u present=%u",
                      hdr.src, payload[0], payload[1]);
             topology_dirty = true;
             dirty_since = esp_timer_get_time();
@@ -886,11 +863,9 @@ void panel_bus_task(void *pvParameters)
             if (elapsed >= 500000) {    /* 500ms in microseconds */
                 ESP_LOGI(TAG, "Topology changed, re-discovering...");
 
-                /* Reset all panels */
-                for (int i = 0; i < topology.num_panels; i++) {
-                    pb_send_frame(topology.panels[i].link,
-                                  topology.panels[i].addr, PB_ADDR_CONTROLLER,
-                                  PB_MSG_RESET, NULL, 0);
+                /* Reset all panels (reverse order so routing paths stay intact) */
+                for (int i = topology.num_panels - 1; i >= 0; i--) {
+                    pb_send_routed(topology.panels[i].addr, PB_MSG_RESET, NULL, 0);
                 }
                 vTaskDelay(pdMS_TO_TICKS(50));
 
