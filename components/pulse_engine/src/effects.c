@@ -29,6 +29,9 @@
 
 /************************/
 
+/* Reference size for scaling: single panel edge length in pixels */
+#define PANEL_SIZE 8
+
 
 /***** BASS MAGNITUDE HELPER - EXTRACTS BASS ENERGY FROM FFT BINS 1-4 ********/
 static float compute_bass_magnitude(const AudioState_t *audio, uint8_t sensitivity)
@@ -132,10 +135,14 @@ static void bass_splash_compute(const Canvas_t *canvas, const FrameState_t *fram
         if (waves[i].intensity <= 0) waves[i].active = 0;
     }
 
-    // Render
+    // Render — use global canvas center, scale wave width with canvas size
     WRGB_t base_color = params->color_set->colors[0];
-    float center_x = canvas->panels[0].center_x;
-    float center_y = canvas->panels[0].center_y;
+    float center_x = (canvas->max_x + canvas->min_x) / 2.0f;
+    float center_y = (canvas->max_y + canvas->min_y) / 2.0f;
+    float cw = canvas->max_x - canvas->min_x + 1;
+    float ch = canvas->max_y - canvas->min_y + 1;
+    float diag = sqrtf(cw * cw + ch * ch);
+    float wave_width = WAVE_WIDTH * (diag / (float)PANEL_SIZE);
     for (int i = 0; i < canvas->num_pixels; i++) {
     	float dx = canvas->pixels[i].x - center_x;
         float dy = canvas->pixels[i].y - center_y;
@@ -145,8 +152,8 @@ static void bass_splash_compute(const Canvas_t *canvas, const FrameState_t *fram
         for (int w = 0; w < MAX_WAVES; w++) {
             if (!waves[w].active) continue;
             float diff = fabsf(dist - waves[w].radius);
-            if (diff < WAVE_WIDTH) {
-                float contrib = waves[w].intensity * (1.0f - diff / WAVE_WIDTH);
+            if (diff < wave_width) {
+                float contrib = waves[w].intensity * (1.0f - diff / wave_width);
                 if (contrib > brightness) brightness = contrib;
             }
         }
@@ -458,6 +465,9 @@ static void spectrum_compute(const Canvas_t *canvas, const FrameState_t *frame,
 		const EffectParams_t *params, const Mapping_t *mapping,
 		uint8_t *framebuffer) {
 
+	int w = canvas->max_x - canvas->min_x + 1;
+	int h = canvas->max_y - canvas->min_y + 1;
+
 	static AudioState_t audio;
 	static float bar_heights[8] = {0};
 	static int band_starts[9];
@@ -491,9 +501,9 @@ static void spectrum_compute(const Canvas_t *canvas, const FrameState_t *frame,
 			if (mag > magnitude) magnitude = mag;
 		}
 
-		// Scale to bar height 0-8
+		// Scale to bar height 0-h
 		float db = 20.0f * log10f(magnitude + 1.0f);
-		float target = fminf(fmaxf((db - threshold) * (8.0f / 30.0f), 0.0f), 8.0f);
+		float target = fminf(fmaxf((db - threshold) * ((float)h / 30.0f), 0.0f), (float)h);
 
 		// Attack immediately, decay smoothly
 		if (target > bar_heights[band]) {
@@ -504,14 +514,17 @@ static void spectrum_compute(const Canvas_t *canvas, const FrameState_t *frame,
 		}
 	}
 
-	// Render — each column is one band, color by column from palette
+	// Render — map each pixel column to one of 8 bands
 	for (int i = 0; i < canvas->num_pixels; i++) {
-		int x = canvas->pixels[i].x;
-		int y = canvas->pixels[i].y;
+		int x = canvas->pixels[i].x - canvas->min_x;
+		int y = canvas->pixels[i].y - canvas->min_y;
 		int led = canvas->pixels[i].led_index * 3;
 
-		if ((float)y < bar_heights[x]) {
-			uint8_t palette_index = (uint8_t)(x * 255 / 7);
+		int band = x * 8 / w;
+		if (band > 7) band = 7;
+
+		if ((float)y < bar_heights[band]) {
+			uint8_t palette_index = (uint8_t)(band * 255 / 7);
 			WRGB_t rgb = palette_color_at(params->palette, palette_index);
 			framebuffer[led + 0] = rgb.r;
 			framebuffer[led + 1] = rgb.g;
@@ -701,6 +714,9 @@ static void tunnel_compute(const Canvas_t *canvas, const FrameState_t *frame,
     float center_y = (canvas->max_y + canvas->min_y) / 2.0f;
     int num_colors = params->color_set->num_colors;
     if (num_colors < 1) num_colors = 1;
+    float tw = canvas->max_x - canvas->min_x + 1;
+    float th = canvas->max_y - canvas->min_y + 1;
+    float ring_scale = fmaxf(tw, th) / (float)PANEL_SIZE;
 
     static float phase = 0.0f;
     static float accum = 0.0f;
@@ -715,7 +731,7 @@ static void tunnel_compute(const Canvas_t *canvas, const FrameState_t *frame,
     for (int i = 0; i < canvas->num_pixels; i++) {
         float dx = fabsf(canvas->pixels[i].x - center_x);
         float dy = fabsf(canvas->pixels[i].y - center_y);
-        int ring = (int)fmaxf(dx, dy);
+        int ring = (int)(fmaxf(dx, dy) / ring_scale);
 
         int color_idx = ((ring - phase_int) % num_colors + num_colors) % num_colors;
         WRGB_t c = params->color_set->colors[color_idx];
@@ -728,26 +744,29 @@ static void tunnel_compute(const Canvas_t *canvas, const FrameState_t *frame,
 }
 
 /***** MATRIX EFFECT - RANDOMLY FALLING BLOCKS WITH BRIGHT HEAD AND FADING TRAIL ********/
+#define MATRIX_MAX_W 32
+#define MATRIX_MAX_H 32
+
 static void matrix_compute(const Canvas_t *canvas, const FrameState_t *frame,
         const EffectParams_t *params, const Mapping_t *mapping,
         uint8_t *framebuffer) {
 
     int w = canvas->max_x - canvas->min_x + 1;
     int h = canvas->max_y - canvas->min_y + 1;
-    if (w > 16) w = 16;
-    if (h > 16) h = 16;
+    if (w > MATRIX_MAX_W) w = MATRIX_MAX_W;
+    if (h > MATRIX_MAX_H) h = MATRIX_MAX_H;
 
-    static float drop_y[16];
-    static float spawn_timer[16];
-    static uint8_t trail[16 * 16];
+    static float drop_y[MATRIX_MAX_W];
+    static float spawn_timer[MATRIX_MAX_W];
+    static uint8_t trail[MATRIX_MAX_W * MATRIX_MAX_H];
     static bool initialized = false;
 
     if (!initialized) {
-        for (int x = 0; x < 16; x++) {
+        for (int x = 0; x < MATRIX_MAX_W; x++) {
             drop_y[x] = (float)h;
             spawn_timer[x] = (float)(rand() % 100) / 100.0f * 2.0f;
         }
-        for (int i = 0; i < 16 * 16; i++) trail[i] = 0;
+        for (int i = 0; i < MATRIX_MAX_W * MATRIX_MAX_H; i++) trail[i] = 0;
         initialized = true;
     }
 
@@ -814,14 +833,17 @@ static void plasma_compute(const Canvas_t *canvas, const FrameState_t *frame,
 
     float t = frame->time * (0.3f + params->speed * 2.0f);
 
-    float w = (float)(canvas->max_x - canvas->min_x + 1);
-    float h = (float)(canvas->max_y - canvas->min_y + 1);
-    float cx = w * 0.5f;
-    float cy = h * 0.5f;
+    float pw = (float)(canvas->max_x - canvas->min_x + 1);
+    float ph = (float)(canvas->max_y - canvas->min_y + 1);
+    /* Scale factors to normalize coordinates to reference PANEL_SIZE */
+    float sx = (float)PANEL_SIZE / pw;
+    float sy = (float)PANEL_SIZE / ph;
+    float ncx = (float)PANEL_SIZE * 0.5f;
+    float ncy = (float)PANEL_SIZE * 0.5f;
 
     for (int i = 0; i < canvas->num_pixels; i++) {
-        float x = (float)canvas->pixels[i].x;
-        float y = (float)canvas->pixels[i].y;
+        float x = (float)canvas->pixels[i].x * sx;
+        float y = (float)canvas->pixels[i].y * sy;
 
         // Layer 1: horizontal sine
         float v = sinf(x * 0.8f + t * 1.3f);
@@ -830,8 +852,8 @@ static void plasma_compute(const Canvas_t *canvas, const FrameState_t *frame,
         // Layer 3: diagonal sine
         v += sinf((x + y) * 0.6f + t * 0.7f);
         // Layer 4: radial sine from center
-        float dx = x - cx + sinf(t * 0.4f) * 2.0f;
-        float dy = y - cy + cosf(t * 0.3f) * 2.0f;
+        float dx = x - ncx + sinf(t * 0.4f) * 2.0f;
+        float dy = y - ncy + cosf(t * 0.3f) * 2.0f;
         v += sinf(sqrtf(dx * dx + dy * dy) * 1.0f - t * 1.1f);
 
         // v is in range [-4, 4], map to [0, 255]

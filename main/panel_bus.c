@@ -10,6 +10,7 @@
 
 #include "panel_bus.h"
 #include "canvas.h"
+#include "tcp_cmd_server.h"
 
 static const char *TAG = "panel_bus";
 
@@ -198,14 +199,21 @@ int pb_recv_frame(const PbLink_t *link, PbFrameHeader_t *hdr,
     /* Scan for sync byte */
     while (1) {
         int64_t remaining_us = deadline - esp_timer_get_time();
-        if (remaining_us <= 0) return -1;
+        if (remaining_us <= 0) {
+            ESP_LOGD(TAG, "pb_recv: timeout waiting for sync byte (UART%d)", link->uart_num);
+            return -1;
+        }
 
         int ms = (int)(remaining_us / 1000);
         if (ms < 1) ms = 1;
 
         int n = uart_read_bytes(link->uart_num, &byte, 1, pdMS_TO_TICKS(ms));
-        if (n <= 0) return -1;
+        if (n <= 0) {
+            ESP_LOGD(TAG, "pb_recv: no data (UART%d)", link->uart_num);
+            return -1;
+        }
         if (byte == PB_SYNC_BYTE) break;
+        ESP_LOGD(TAG, "pb_recv: skipping non-sync byte 0x%02x (UART%d)", byte, link->uart_num);
     }
 
     /* Read remaining header (DST, SRC, TYPE, LEN) */
@@ -258,10 +266,13 @@ int pb_recv_frame(const PbLink_t *link, PbFrameHeader_t *hdr,
     uint8_t expected_crc = pb_crc8(crc_buf, 4 + hdr->len);
 
     if (rx_crc != expected_crc) {
-        ESP_LOGW(TAG, "CRC mismatch: got 0x%02x, expected 0x%02x", rx_crc, expected_crc);
+        ESP_LOGW(TAG, "CRC mismatch: got 0x%02x, expected 0x%02x (UART%d, type=0x%02x)",
+                 rx_crc, expected_crc, link->uart_num, hdr->type);
         return -1;
     }
 
+    ESP_LOGD(TAG, "pb_recv: frame type=0x%02x dst=0x%02x src=0x%02x len=%d (UART%d)",
+             hdr->type, hdr->dst, hdr->src, hdr->len, link->uart_num);
     return hdr->len;
 }
 
@@ -277,9 +288,11 @@ bool panel_bus_sense(const PbLink_t *link)
 
 void panel_bus_set_controller_mux(PbSide_t out_side)
 {
-    /* IO10: 0 = route PWM out NORTH, 1 = route PWM out EAST
-     * TODO: verify polarity against actual hardware mux truth table */
-    int level = (out_side == PB_SIDE_EAST) ? 1 : 0;
+    /* IO10 drives the SN74LVC1G3157 select pin (S):
+     *   S = 1 -> B2 (pin 1) -> NORTH
+     *   S = 0 -> B1 (pin 3) -> EAST  (also the power-on default)
+     */
+    int level = (out_side == PB_SIDE_NORTH) ? 1 : 0;
     gpio_set_level(PB_MUX_SELECT_GPIO, level);
     ESP_LOGI(TAG, "Controller MUX set to %s (GPIO %d = %d)",
              side_name(out_side), PB_MUX_SELECT_GPIO, level);
@@ -341,8 +354,10 @@ static int discover_direct(PbLink_t *link, PbTopology_t *topo, int8_t grid_x, in
     /* Send DISCOVER with the side the neighbor is being probed from
      * (from their perspective, it's the opposite of our side) */
     uint8_t side_payload = PB_OPPOSITE_SIDE(link->side);
+    ESP_LOGI(TAG, "TX DISCOVER on %s (their side=%d)", side_name(link->side), side_payload);
     if (pb_send_frame(link, PB_ADDR_UNASSIGNED, PB_ADDR_CONTROLLER,
                       PB_MSG_DISCOVER, &side_payload, 1) != 0) {
+        ESP_LOGE(TAG, "TX DISCOVER failed (uart write)");
         return -1;
     }
 
@@ -352,8 +367,9 @@ static int discover_direct(PbLink_t *link, PbTopology_t *topo, int8_t grid_x, in
     int resp_len = pb_recv_frame(link, &resp_hdr, resp_payload, sizeof(resp_payload),
                                  DISCOVER_TIMEOUT_MS);
     if (resp_len < 0 || resp_hdr.type != PB_MSG_DISCOVER_RESP || resp_len < 4) {
-        ESP_LOGW(TAG, "No DISCOVER_RESP on %s",
-                 side_name(link->side));
+        ESP_LOGW(TAG, "No DISCOVER_RESP on %s (resp_len=%d, type=0x%02x)",
+                 side_name(link->side), resp_len,
+                 resp_len >= 0 ? resp_hdr.type : 0);
         return 0;
     }
 
@@ -371,8 +387,11 @@ static int discover_direct(PbLink_t *link, PbTopology_t *topo, int8_t grid_x, in
     memcpy(assign_payload, resp_payload, 4);        /* hw_id */
     assign_payload[4] = new_addr;
 
+    ESP_LOGI(TAG, "RX DISCOVER_RESP hw_id=%02x%02x%02x%02x, TX ASSIGN_ADDR addr=0x%02x",
+             resp_payload[0], resp_payload[1], resp_payload[2], resp_payload[3], new_addr);
     if (pb_send_frame(link, PB_ADDR_UNASSIGNED, PB_ADDR_CONTROLLER,
                       PB_MSG_ASSIGN_ADDR, assign_payload, 5) != 0) {
+        ESP_LOGE(TAG, "TX ASSIGN_ADDR failed (uart write)");
         return -1;
     }
 
@@ -380,9 +399,11 @@ static int discover_direct(PbLink_t *link, PbTopology_t *topo, int8_t grid_x, in
     resp_len = pb_recv_frame(link, &resp_hdr, resp_payload, sizeof(resp_payload),
                              ASSIGN_TIMEOUT_MS);
     if (resp_len < 0 || resp_hdr.type != PB_MSG_ASSIGN_RESP) {
-        ESP_LOGW(TAG, "No ASSIGN_RESP");
+        ESP_LOGW(TAG, "No ASSIGN_RESP (resp_len=%d, type=0x%02x)",
+                 resp_len, resp_len >= 0 ? resp_hdr.type : 0);
         return -1;
     }
+    ESP_LOGI(TAG, "RX ASSIGN_RESP ok");
 
     /* Record panel info */
     PbPanelInfo_t *panel = &topo->panels[topo->num_panels];
@@ -396,12 +417,17 @@ static int discover_direct(PbLink_t *link, PbTopology_t *topo, int8_t grid_x, in
     panel->mux_out = PB_SIDE_NONE;
 
     /* Query neighbors */
+    ESP_LOGI(TAG, "TX QUERY_NEIGHBORS to addr=0x%02x", panel->addr);
     if (pb_send_frame(link, panel->addr, PB_ADDR_CONTROLLER,
                       PB_MSG_QUERY_NEIGHBORS, NULL, 0) == 0) {
         resp_len = pb_recv_frame(link, &resp_hdr, resp_payload, sizeof(resp_payload),
                                  DISCOVER_TIMEOUT_MS);
         if (resp_len >= 1 && resp_hdr.type == PB_MSG_NEIGHBORS_RESP) {
             panel->neighbors = resp_payload[0];
+            ESP_LOGI(TAG, "RX NEIGHBORS_RESP neighbors=0x%02x", panel->neighbors);
+        } else {
+            ESP_LOGW(TAG, "No NEIGHBORS_RESP (resp_len=%d, type=0x%02x)",
+                     resp_len, resp_len >= 0 ? resp_hdr.type : 0);
         }
     }
 
@@ -679,6 +705,8 @@ int panel_bus_configure_routing(PbTopology_t *topo)
         PbPanelInfo_t *panel = &topo->panels[topo->chain_order[i]];
         uint8_t mux_payload[2] = { panel->mux_in, panel->mux_out };
 
+        ESP_LOGI(TAG, "TX SET_MUX to addr=0x%02x mux_in=%d mux_out=%d",
+                 panel->addr, panel->mux_in, panel->mux_out);
         if (pb_send_routed(panel->addr, PB_MSG_SET_MUX, mux_payload, 2) != 0) {
             ESP_LOGE(TAG, "Failed to send SET_MUX to addr=0x%02x", panel->addr);
             return -1;
@@ -801,6 +829,7 @@ void panel_bus_task(void *pvParameters)
 
         ESP_LOGI(TAG, "Panel grid configured: %d panels, %d LEDs in chain",
                  topology.chain_len, topology.chain_len * 64);
+        tcp_push_status();
     } else {
         ESP_LOGI(TAG, "No panels discovered, using single-panel mode");
     }
@@ -882,6 +911,8 @@ void panel_bus_task(void *pvParameters)
                     canvas_updating = false;
                 }
 
+                /* Notify desktop app of new grid dimensions and topology */
+                tcp_push_status();
                 topology_dirty = false;
             }
         }

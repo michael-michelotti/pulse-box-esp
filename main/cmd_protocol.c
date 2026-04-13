@@ -4,6 +4,7 @@
 #include "effects.h"
 #include "led_math.h"
 #include "canvas.h"
+#include "panel_bus.h"
 
 /* Externs from main.c */
 extern EffectParams_t effect_params;
@@ -43,7 +44,13 @@ int proto_build_status(uint8_t *buf, size_t buf_size)
     const char *pname = effect_params.palette->name;
     uint8_t pname_len = (uint8_t)strlen(pname);
 
-    size_t total = STATUS_FIXED_SIZE + 1 + ename_len + 1 + pname_len;
+    /* Panel topology: controller at (0,0) + discovered remote panels */
+    const PbTopology_t *topo = panel_bus_get_topology();
+    uint8_t num_topo_panels = 1 + topo->chain_len; /* controller + remotes */
+
+    /* Total: fixed + effect name + palette name + panel topology */
+    size_t total = STATUS_FIXED_SIZE + 1 + ename_len + 1 + pname_len
+                 + 1 + num_topo_panels * 2;
     if (total > buf_size) return -1;
 
     StatusFixed_t fixed = {
@@ -76,6 +83,18 @@ int proto_build_status(uint8_t *buf, size_t buf_size)
     buf[offset++] = pname_len;
     memcpy(buf + offset, pname, pname_len);
     offset += pname_len;
+
+    /* Panel topology: [num_panels: u8] then [grid_x: u8, grid_y: u8] per panel */
+    buf[offset++] = num_topo_panels;
+    /* Controller is always at (0, 0) */
+    buf[offset++] = 0;
+    buf[offset++] = 0;
+    /* Remote panels in chain order */
+    for (int i = 0; i < topo->chain_len; i++) {
+        const PbPanelInfo_t *p = &topo->panels[topo->chain_order[i]];
+        buf[offset++] = (uint8_t)p->grid_x;
+        buf[offset++] = (uint8_t)p->grid_y;
+    }
 
     return offset;
 }
