@@ -4,6 +4,6 @@
 [submodule "tools/pulsebox-panel"]
 	path = tools/pulsebox-panel
 	url = git@github.com:michael-michelotti/pulse-box-panel.git
-[submodule "tools/pulse-box-panel"]
-	path = tools/pulse-box-panel
-	url = git@github.com:michael-michelotti/pulse-box-panel.git
+[submodule "tools/pulse-box-pcb"]
+	path = tools/pulse-box-pcb
+	url = git@github.com:michael-michelotti/pulse-box-pcb.git
