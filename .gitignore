@@ -81,6 +81,7 @@ Desktop.ini
 .devcontainer/
 .clangd
 dependencies.lock
-*.md
+CLAUDE.md
+AGENTS.md
 .claude
 *.svdat
