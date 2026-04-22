@@ -14,47 +14,7 @@ A real-time embedded system that drives expandable WS2812B LED grids with a libr
 
 ## System Overview
 
-```mermaid
-%%{ init: { "flowchart": { "curve": "basis", "nodeSpacing": 40, "rankSpacing": 60 } } }%%
-graph TB
-    subgraph Desktop["&nbsp;Desktop App (Tauri v2)&nbsp;"]
-        direction LR
-        audio["WASAPI<br/>Audio Capture"]
-        control["Control UI<br/>& Live Preview"]
-    end
-
-    subgraph Controller["&nbsp;ESP32-S3 Controller&nbsp;"]
-        direction LR
-        fft["FFT &<br/>Spectral Analysis"]
-        render["Effect Render<br/>Pipeline"]
-        led["RMT LED<br/>Driver"]
-        fft --> render --> led
-    end
-
-    subgraph Panels["&nbsp;STM32G0 Panel Grid&nbsp;"]
-        direction LR
-        p1["Panel<br/>(0,0)"]
-        p2["Panel<br/>(1,0)"]
-        p3["Panel<br/>(2,0)"]
-        p1 -- "WS2812B" --> p2 -- "WS2812B" --> p3
-    end
-
-    audio      == "UDP · 48 kHz PCM"   ==> fft
-    control    -- "TCP TLV Commands"   --> render
-    render     -. "Status & Preview"  .-> control
-    led        == "WS2812B Data"       ==> p1
-    render     -- "UART Panel Bus"     --> p1
-
-    classDef desktopNode   fill:#1e3a5f,stroke:#5aa0e8,stroke-width:1px,color:#eaf2fb
-    classDef controllerNode fill:#3d2a5f,stroke:#a98adb,stroke-width:1px,color:#f1e9fb
-    classDef panelNode     fill:#2e5a3d,stroke:#7ccb94,stroke-width:1px,color:#e9fbef
-    class audio,control desktopNode
-    class fft,render,led controllerNode
-    class p1,p2,p3 panelNode
-
-    classDef subgraphStyle fill:#0d1117,stroke:#30363d,color:#c9d1d9
-    class Desktop,Controller,Panels subgraphStyle
-```
+![System Block Diagram](docs/images/PulseBox_Block_Diagram.svg)
 
 Pulse Box is a three-part system: the **ESP32-S3 controller** (this repository) runs a 30 FPS render pipeline with multiple visual effects and drives the LED hardware, optional **[STM32G0 panel boards](https://github.com/michael-michelotti/pulse-box-panel)** extend the display into larger grids through a custom UART-based Type-Length-Value (TLV) panel bus. A **[desktop application](https://github.com/michael-michelotti/pulsebox-desktop)** provides a control interface with live preview and can stream system audio for audio-reactive effects.
 
