@@ -4,7 +4,7 @@
 
 <!-- TODO: Replace with GIF/photo of LED grid running effects -->
 
-![Pulse Box in action](docs/images/hero.gif)
+[Pulse Box in action](https://github.com/user-attachments/assets/6c7008e8-37e6-4140-984e-331421be73a4)
 
 A real-time embedded system that drives expandable WS2812B LED grids with a library of visual effects, runtime-tunable parameters (brightness, speed, direction, color palette), and a companion desktop app for control and live preview. Panels connect via a custom UART-based bus with automatic BFS topology discovery — the controller detects the grid shape, computes signal routing, and rebuilds the pixel canvas without configuration. A subset of effects are audio-reactive, driven by a 2048-point FFT running on-chip from audio streamed over WiFi.
 
