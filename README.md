@@ -80,7 +80,7 @@ The sync primitives follow the same idea: keep the render task's worst-case bloc
 
 <!-- TODO: Replace with photo/diagram of multi-panel grid -->
 
-![Panel topology](docs/images/panel-topology.png)
+![Panel topology](docs/images/Panel_Bus_Discovery.svg)
 
 The PulseBox controller is meant to control a dynamically configurable grid of 8x8 LEDs. The panel bus protocol allows the controller to discover single 8x8 LED grids in an arbitrarily shaped multi-panel display without requiring the controller to individually address every panel over a shared bus.
 
@@ -197,9 +197,7 @@ idf.py flash monitor         # Flash and open serial console
 
 ## Hardware
 
-<!-- TODO: Replace with photo of the controller PCB -->
-
-![Controller PCB](docs/images/controller-pcb.jpg)
+![Controller PCB](docs/images/Controller_Board.png)
 
 - **Controller:** Custom v2 PCB with ESP32-S3-WROOM (N8R8 — 8 MB flash, 8 MB PSRAM)
 - **Panel boards:** Custom PCB with STM32G071C8T6 (Cortex-M0+), 4 UART links, 2 analog muxes
