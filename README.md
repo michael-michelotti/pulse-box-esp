@@ -196,10 +196,11 @@ idf.py flash monitor         # Flash and open serial console
 ---
 
 ## Hardware
+### Controller PCB v2
+Custom v2 PCB with ESP32-S3-WROOM (N8R8 — 8 MB flash, 8 MB PSRAM)
+![Controller PCB](https://github.com/user-attachments/assets/0e361c78-d5e3-481d-85b6-f4b3cbe4a778)
 
-![Controller PCB](docs/images/Controller_Board.png)
-
-- **Controller:** Custom v2 PCB with ESP32-S3-WROOM (N8R8 — 8 MB flash, 8 MB PSRAM)
+### Other Hardware
 - **Panel boards:** Custom PCB with STM32G071C8T6 (Cortex-M0+), 4 UART links, 2 analog muxes
 - **LEDs:** WS2812B, 8x8 grids per panel, driven via RMT peripheral with DMA
 - **Interconnect:** 11-pin board-to-board connectors carrying 24V power, UART, sense, and WS2812B data
@@ -213,7 +214,7 @@ idf.py flash monitor         # Flash and open serial console
 | Status LED                           | 41         |
 | USB console (UART0)                  | 43, 44     |
 
-See **[pulse-box-pcb](https://github.com/michael-michelotti/pulse-box-pcb)** for schematics and board layouts.
+See **[pulse-box-pcb](https://github.com/michael-michelotti/pulse-box-pcb)** for detailed schematics and board layouts.
 
 ---
 
